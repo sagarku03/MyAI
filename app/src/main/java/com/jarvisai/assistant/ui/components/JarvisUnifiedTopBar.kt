@@ -87,6 +87,7 @@ fun JarvisUnifiedTopBar(
     onIdeClick: () -> Unit = {},
     onOverlayHudClick: () -> Unit = {}
 ) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     var showProjectMenu by remember { mutableStateOf(false) }
     var showStatusMenu by remember { mutableStateOf(false) }
 
@@ -114,11 +115,11 @@ fun JarvisUnifiedTopBar(
     }
 
     val statusDotColor = when {
-        isServerError -> Color(0xFFEF4444)
-        isServerStopped -> Color(0xFF6B7280)
-        isServerStarting || isAgentBusy -> Color(0xFFF59E0B)
-        isVoiceActive -> Color(0xFF00E5FF)
-        else -> Color(0xFF22C55E)
+        isServerError -> themeColors.statusRoseRed
+        isServerStopped -> themeColors.textMuted
+        isServerStarting || isAgentBusy -> themeColors.statusAmber
+        isVoiceActive -> themeColors.accent
+        else -> themeColors.statusEmerald
     }
 
     val projectPillLabel = remember(activeWorkspaceName, activeChatFolder) {
@@ -138,7 +139,7 @@ fun JarvisUnifiedTopBar(
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = Color(0xFF000000),
+        color = themeColors.surface,
         tonalElevation = 0.dp
     ) {
         androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxWidth()) {
@@ -146,11 +147,10 @@ fun JarvisUnifiedTopBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Left: Hamburger Menu + Compact AntiGem Chat Title
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
@@ -158,43 +158,40 @@ fun JarvisUnifiedTopBar(
                     IconButton(
                         onClick = onMenuClick,
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(48.dp)
                             .testTag("topbar_menu_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Menu,
                             contentDescription = "Open Navigation Drawer",
-                            tint = Color(0xFFE5E7EB),
-                            modifier = Modifier.size(21.dp)
+                            tint = themeColors.textPrimary,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(2.dp))
-
                     Text(
-                        text = chatTitle.ifBlank { "New Chat" },
-                        color = Color(0xFFF3F4F6),
+                        text = chatTitle.ifBlank { "New Thread" },
+                        color = themeColors.textPrimary,
                         fontFamily = FontFamily.SansSerif,
-                        fontSize = 15.5.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(end = 8.dp)
                     )
                 }
 
-                // Right: AntiGem Compact [● workspace] Pill + [💬+] New Chat Button
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Box {
                         Surface(
-                            shape = RoundedCornerShape(18.dp),
-                            color = Color(0xFF11151C),
-                            border = BorderStroke(0.8.dp, Color(0xFF232A36)),
+                            shape = RoundedCornerShape(10.dp),
+                            color = themeColors.surfaceElevated,
+                            border = BorderStroke(1.dp, themeColors.border),
                             modifier = Modifier
-                                .clip(RoundedCornerShape(18.dp))
+                                .clip(RoundedCornerShape(10.dp))
                                 .clickable {
                                     if (onOpenWorkspaceSelector != null) {
                                         onOpenWorkspaceSelector()
@@ -208,7 +205,6 @@ fun JarvisUnifiedTopBar(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Interactive green status dot INSIDE the pill just like AntiGem
                                 Box(
                                     modifier = Modifier
                                         .size(16.dp)
@@ -219,18 +215,18 @@ fun JarvisUnifiedTopBar(
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(7.dp)
+                                            .size(8.dp)
                                             .graphicsLayer { alpha = pulseAlpha }
                                             .clip(CircleShape)
                                             .background(statusDotColor)
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(5.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = projectPillLabel,
-                                    color = Color(0xFFD1D5DB),
+                                    color = themeColors.textSecondary,
                                     fontFamily = FontFamily.SansSerif,
-                                    fontSize = 12.5.sp,
+                                    fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -254,16 +250,16 @@ fun JarvisUnifiedTopBar(
                         expanded = showProjectMenu,
                         onDismissRequest = { showProjectMenu = false },
                         modifier = Modifier
-                            .background(Color(0xFF141821))
+                            .background(themeColors.surfaceElevated)
                             .width(260.dp)
                             .heightIn(max = 460.dp)
                     ) {
                         Text(
-                            text = "CHAT FOLDERS & PROJECTS",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF6B7280),
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            text = "Folders & Projects",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = themeColors.textMuted,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                         )
 
                         distinctFolders.forEach { folder ->
@@ -272,9 +268,9 @@ fun JarvisUnifiedTopBar(
                                 text = {
                                     Text(
                                         text = folder,
-                                        color = if (isSelected) Color.White else Color(0xFFD1D5DB),
-                                        fontSize = 13.5.sp,
-                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (isSelected) themeColors.textPrimary else themeColors.textSecondary,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -283,7 +279,7 @@ fun JarvisUnifiedTopBar(
                                     Icon(
                                         imageVector = if (folder.equals("General", ignoreCase = true)) Icons.Default.Public else Icons.Default.Folder,
                                         contentDescription = null,
-                                        tint = if (isSelected) Color(0xFF22C55E) else Color(0xFF9CA3AF),
+                                        tint = if (isSelected) themeColors.accent else themeColors.textMuted,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 },
@@ -292,7 +288,7 @@ fun JarvisUnifiedTopBar(
                                         Icon(
                                             imageVector = Icons.Default.Check,
                                             contentDescription = "Selected",
-                                            tint = Color(0xFF22C55E),
+                                            tint = themeColors.accent,
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
@@ -305,13 +301,13 @@ fun JarvisUnifiedTopBar(
                         }
 
                         if (workspaces.isNotEmpty()) {
-                            HorizontalDivider(color = Color(0xFF1F2937), modifier = Modifier.padding(vertical = 4.dp))
+                            HorizontalDivider(color = themeColors.divider, modifier = Modifier.padding(vertical = 4.dp))
                             Text(
-                                text = "LOCAL WORKSPACES",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF6B7280),
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                text = "Local Workspaces",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = themeColors.textMuted,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )
                             workspaces.forEach { dir ->
                                 val isWsSelected = activeWorkspaceName == dir.name
@@ -319,8 +315,8 @@ fun JarvisUnifiedTopBar(
                                     text = {
                                         Text(
                                             text = dir.name,
-                                            color = if (isWsSelected) Color.White else Color(0xFFD1D5DB),
-                                            fontSize = 13.5.sp,
+                                            color = if (isWsSelected) themeColors.textPrimary else themeColors.textSecondary,
+                                            fontSize = 13.sp,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -329,7 +325,7 @@ fun JarvisUnifiedTopBar(
                                         Icon(
                                             imageVector = Icons.Default.Code,
                                             contentDescription = null,
-                                            tint = if (isWsSelected) Color(0xFF60A5FA) else Color(0xFF9CA3AF),
+                                            tint = if (isWsSelected) themeColors.accent else themeColors.textMuted,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     },
@@ -338,7 +334,7 @@ fun JarvisUnifiedTopBar(
                                             Icon(
                                                 imageVector = Icons.Default.Check,
                                                 contentDescription = "Active workspace",
-                                                tint = Color(0xFF60A5FA),
+                                                tint = themeColors.accent,
                                                 modifier = Modifier.size(16.dp)
                                             )
                                         }
@@ -351,13 +347,13 @@ fun JarvisUnifiedTopBar(
                             }
                         }
 
-                        HorizontalDivider(color = Color(0xFF1F2937), modifier = Modifier.padding(vertical = 4.dp))
+                        HorizontalDivider(color = themeColors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
                         DropdownMenuItem(
                             text = {
                                 Text(
                                     text = "Manage / Create Folder",
-                                    color = Color(0xFF60A5FA),
+                                    color = themeColors.accent,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Medium
                                 )
@@ -366,7 +362,7 @@ fun JarvisUnifiedTopBar(
                                 Icon(
                                     imageVector = Icons.Default.CreateNewFolder,
                                     contentDescription = null,
-                                    tint = Color(0xFF60A5FA),
+                                    tint = themeColors.accent,
                                     modifier = Modifier.size(18.dp)
                                 )
                             },
@@ -376,23 +372,23 @@ fun JarvisUnifiedTopBar(
                             }
                         )
 
-                        HorizontalDivider(color = Color(0xFF1F2937), modifier = Modifier.padding(vertical = 4.dp))
+                        HorizontalDivider(color = themeColors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
                         Text(
-                            text = "QUICK WORKSPACE VIEWS",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF6B7280),
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            text = "Workspace Views",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = themeColors.textMuted,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                         )
 
                         DropdownMenuItem(
-                            text = { Text("Sora Code IDE", color = Color(0xFFE5E7EB), fontSize = 13.sp) },
+                            text = { Text("Sora Code IDE", color = themeColors.textPrimary, fontSize = 13.sp) },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Default.Code,
                                     contentDescription = null,
-                                    tint = Color(0xFF38BDF8),
+                                    tint = themeColors.textSecondary,
                                     modifier = Modifier.size(18.dp)
                                 )
                             },
@@ -403,12 +399,12 @@ fun JarvisUnifiedTopBar(
                         )
 
                         DropdownMenuItem(
-                            text = { Text("Linux Terminal", color = Color(0xFFE5E7EB), fontSize = 13.sp) },
+                            text = { Text("Linux Terminal", color = themeColors.textPrimary, fontSize = 13.sp) },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Default.Terminal,
                                     contentDescription = null,
-                                    tint = Color(0xFF00E5FF),
+                                    tint = themeColors.textSecondary,
                                     modifier = Modifier.size(18.dp)
                                 )
                             },
@@ -419,11 +415,11 @@ fun JarvisUnifiedTopBar(
                         )
 
                         DropdownMenuItem(
-                            text = { Text("Agent Server Status & Logs", color = Color(0xFF22C55E), fontSize = 13.sp) },
+                            text = { Text("Agent Server Status & Logs", color = themeColors.textPrimary, fontSize = 13.sp) },
                             leadingIcon = {
                                 Box(
                                     modifier = Modifier
-                                        .size(9.dp)
+                                        .size(8.dp)
                                         .clip(CircleShape)
                                         .background(statusDotColor)
                                 )
@@ -439,21 +435,21 @@ fun JarvisUnifiedTopBar(
                 IconButton(
                     onClick = onNewChatClick,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(48.dp)
                         .testTag("topbar_new_chat_button")
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.AddComment,
                         contentDescription = "Start New Chat",
-                        tint = Color(0xFFD1D5DB),
+                        tint = themeColors.textPrimary,
                         modifier = Modifier.size(20.dp)
                     )
                 }
             }
             }
             HorizontalDivider(
-                color = Color(0xFF141821),
-                thickness = 0.6.dp
+                color = themeColors.divider,
+                thickness = 1.dp
             )
         }
     }

@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.theme.JarvisTheme
 import com.jarvisai.assistant.data.remote.AntigravityModelInfo
 import com.jarvisai.assistant.model.ThinkingLevel
 import kotlinx.coroutines.launch
@@ -167,16 +168,17 @@ fun AntigravityLoginDialog(
     var manualCodeInput by remember { mutableStateOf("") }
     val tierDisplay = remember(tier) { formatAntigravityTierBadge(tier) }
 
+    val themeColors = JarvisTheme.colors
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(10.dp)
                 .testTag("antigravity_login_dialog"),
-            shape = RoundedCornerShape(20.dp),
-            color = Color(0xFF111827),
-            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.35f)),
-            tonalElevation = 8.dp
+            shape = RoundedCornerShape(16.dp),
+            color = themeColors.surfaceElevated,
+            border = BorderStroke(1.dp, themeColors.border),
+            tonalElevation = 4.dp
         ) {
             Column(
                 modifier = Modifier
@@ -187,16 +189,16 @@ fun AntigravityLoginDialog(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(52.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF00E5FF).copy(alpha = 0.15f)),
+                        .background(themeColors.primary.copy(alpha = 0.14f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Cloud,
                         contentDescription = "Antigravity Cloud",
-                        tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(26.dp)
+                        tint = themeColors.primary,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
@@ -205,15 +207,15 @@ fun AntigravityLoginDialog(
                 Text(
                     text = if (isLoggedIn) "Google Antigravity Account" else "Google Antigravity Auth",
                     fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    fontWeight = FontWeight.SemiBold,
+                    color = themeColors.textPrimary
                 )
 
                 Text(
                     text = if (isLoggedIn) "Plan: $tierDisplay • Synced to your Google account entitlements"
                     else "Sign in with Google to load models & quota supported by your account",
                     fontSize = 11.sp,
-                    color = Color(0xFF94A3B8),
+                    color = themeColors.textSecondary,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
 
@@ -221,7 +223,7 @@ fun AntigravityLoginDialog(
                     text = "Isolated Hub: 127.0.0.1:${com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)} (${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR})",
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = Color(0xFF00E5FF).copy(alpha = 0.85f)
+                    color = themeColors.primary.copy(alpha = 0.85f)
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -230,23 +232,23 @@ fun AntigravityLoginDialog(
                     // Profile Summary Card
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF1F2937),
-                        border = BorderStroke(1.dp, Color(0xFF374151))
+                        shape = RoundedCornerShape(10.dp),
+                        color = themeColors.cardSurface,
+                        border = BorderStroke(1.dp, themeColors.border)
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     imageVector = Icons.Default.AccountCircle,
                                     contentDescription = "Signed in account",
-                                    tint = Color(0xFF00E5FF),
+                                    tint = themeColors.primary,
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = userEmail,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.SemiBold,
+                                    color = themeColors.textPrimary,
+                                    fontWeight = FontWeight.Medium,
                                     fontSize = 13.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -257,12 +259,12 @@ fun AntigravityLoginDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(text = "Project / Quota:", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                Text(text = "Project / Quota:", fontSize = 11.sp, color = themeColors.textSecondary)
                                 Text(
                                     text = if (resolvedProjectId.isBlank()) "Personal Antigravity Quota" else resolvedProjectId,
                                     fontSize = 11.sp,
-                                    color = Color(0xFF00E5FF),
-                                    fontWeight = FontWeight.Bold
+                                    color = themeColors.primary,
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                             Row(
@@ -412,7 +414,7 @@ fun AntigravityLoginDialog(
                                     if (hubSignedIn != true) {
                                         OutlinedButton(
                                             onClick = onSyncTokenToLocalHub,
-                                            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.55f)),
+                                            border = BorderStroke(1.dp, themeColors.primary.copy(alpha = 0.55f)),
                                             shape = RoundedCornerShape(10.dp),
                                             modifier = Modifier
                                                 .defaultMinSize(minHeight = 44.dp)
@@ -420,8 +422,8 @@ fun AntigravityLoginDialog(
                                         ) {
                                             Text(
                                                 text = "Sync",
-                                                color = Color(0xFF00E5FF),
-                                                fontWeight = FontWeight.SemiBold,
+                                                color = themeColors.primary,
+                                                fontWeight = FontWeight.Medium,
                                                 fontSize = 11.5.sp
                                             )
                                         }
@@ -433,12 +435,12 @@ fun AntigravityLoginDialog(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Thinking Mode Status Banner (Controlled solely via the dedicated Top Bar Thinking button)
+                    // Thinking Mode Status Banner
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF0F172A),
-                        border = BorderStroke(1.dp, Color(0xFF1E293B))
+                        shape = RoundedCornerShape(10.dp),
+                        color = themeColors.cardSurface,
+                        border = BorderStroke(1.dp, themeColors.border)
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -449,22 +451,22 @@ fun AntigravityLoginDialog(
                                 Icon(
                                     imageVector = Icons.Default.Psychology,
                                     contentDescription = "Thinking Depth",
-                                    tint = Color(0xFF00E5FF),
+                                    tint = themeColors.primary,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "Thinking Mode: ${currentThinkingLevel.label}",
-                                    color = Color.White,
+                                    color = themeColors.textPrimary,
                                     fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                             Text(
-                                text = "Use Top Bar 🧠",
-                                color = Color(0xFF00E5FF),
+                                text = "Top Bar",
+                                color = themeColors.primary,
                                 fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
@@ -479,9 +481,9 @@ fun AntigravityLoginDialog(
                     ) {
                         Text(
                             text = "Supported Models (${antigravityModels.size})",
-                            color = Color.White,
+                            color = themeColors.textPrimary,
                             fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold
                         )
                         TextButton(
                             onClick = onRefreshModels,
@@ -494,20 +496,20 @@ fun AntigravityLoginDialog(
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(14.dp),
                                     strokeWidth = 2.dp,
-                                    color = Color(0xFF00E5FF)
+                                    color = themeColors.primary
                                 )
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.Refresh,
                                     contentDescription = "Refresh Models",
-                                    tint = Color(0xFF00E5FF),
+                                    tint = themeColors.primary,
                                     modifier = Modifier.size(15.dp)
                                 )
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = if (isRefreshingModels) "Syncing..." else "Refresh",
-                                color = Color(0xFF00E5FF),
+                                color = themeColors.primary,
                                 fontSize = 11.5.sp
                             )
                         }
@@ -517,8 +519,8 @@ fun AntigravityLoginDialog(
                         Surface(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF0F172A),
-                            border = BorderStroke(1.dp, Color(0xFF1E293B))
+                            color = themeColors.cardSurface,
+                            border = BorderStroke(1.dp, themeColors.border)
                         ) {
                             Text(
                                 text = if (isRefreshingModels) {
@@ -526,7 +528,7 @@ fun AntigravityLoginDialog(
                                 } else {
                                     "Tap Refresh above to load supported models for your Antigravity account."
                                 },
-                                color = Color(0xFF94A3B8),
+                                color = themeColors.textSecondary,
                                 fontSize = 11.5.sp,
                                 modifier = Modifier.padding(12.dp)
                             )
@@ -545,9 +547,9 @@ fun AntigravityLoginDialog(
                                     model.thinkingVariantIds.values.any { it.equals(bareSelected, ignoreCase = true) }
                                 val quotaPct = model.quotaPercent
                                 val quotaColor = when {
-                                    quotaPct <= 15 -> Color(0xFFEF4444)
-                                    quotaPct <= 40 -> Color(0xFFF59E0B)
-                                    else -> Color(0xFF10B981)
+                                    quotaPct <= 15 -> themeColors.statusRoseRed
+                                    quotaPct <= 40 -> themeColors.statusAmber
+                                    else -> themeColors.statusEmerald
                                 }
                                 Surface(
                                     modifier = Modifier
@@ -564,10 +566,10 @@ fun AntigravityLoginDialog(
                                         }
                                         .testTag("agy_supported_model_${model.id}"),
                                     shape = RoundedCornerShape(10.dp),
-                                    color = if (isCurrent) Color(0xFF00E5FF).copy(alpha = 0.14f) else Color(0xFF0F172A),
+                                    color = if (isCurrent) themeColors.primary.copy(alpha = 0.14f) else themeColors.cardSurface,
                                     border = BorderStroke(
                                         1.dp,
-                                        if (isCurrent) Color(0xFF00E5FF) else Color(0xFF1E293B)
+                                        if (isCurrent) themeColors.primary else themeColors.border
                                     )
                                 ) {
                                     Column(modifier = Modifier.padding(10.dp)) {
@@ -584,7 +586,7 @@ fun AntigravityLoginDialog(
                                                     Icon(
                                                         imageVector = Icons.Default.CheckCircle,
                                                         contentDescription = "Active",
-                                                        tint = Color(0xFF00E5FF),
+                                                        tint = themeColors.primary,
                                                         modifier = Modifier
                                                             .padding(end = 6.dp)
                                                             .size(14.dp)
@@ -592,9 +594,9 @@ fun AntigravityLoginDialog(
                                                 }
                                                 Text(
                                                     text = model.displayName,
-                                                    color = Color.White,
+                                                    color = themeColors.textPrimary,
                                                     fontSize = 12.sp,
-                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontWeight = FontWeight.Medium,
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
@@ -673,8 +675,8 @@ fun AntigravityLoginDialog(
                                 }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
-                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = themeColors.primary),
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .defaultMinSize(minHeight = 48.dp)
@@ -683,14 +685,14 @@ fun AntigravityLoginDialog(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Login,
                             contentDescription = "Sign in with Google",
-                            tint = Color(0xFF0A0E17),
+                            tint = themeColors.onPrimary,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Sign in with Google",
-                            color = Color(0xFF0A0E17),
-                            fontWeight = FontWeight.Bold,
+                            color = themeColors.onPrimary,
+                            fontWeight = FontWeight.SemiBold,
                             fontSize = 14.sp
                         )
                     }

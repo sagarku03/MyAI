@@ -113,6 +113,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.JarvisTheme
 import com.jarvisai.assistant.data.local.ChatSessionEntity
 import java.io.File
 import kotlin.math.max
@@ -324,11 +325,13 @@ fun JarvisNavigationDrawer(
         seen.values.toList()
     }
 
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
+
     ModalDrawerSheet(
-        drawerContainerColor = Color(0xFF090B0F),
-        drawerContentColor = Color.White,
+        drawerContainerColor = themeColors.background,
+        drawerContentColor = themeColors.textPrimary,
         modifier = Modifier
-            .width(326.dp)
+            .width(320.dp)
             .testTag("jarvis_navigation_drawer")
     ) {
         Column(
@@ -337,7 +340,6 @@ fun JarvisNavigationDrawer(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // --- 1. ANTIGEM-STYLE SLEEK ICON-ONLY TOP HEADER ---
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -348,17 +350,17 @@ fun JarvisNavigationDrawer(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Agentra",
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = themeColors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     if (activeTab == DrawerViewTab.ARCHIVED) {
                         Text(
                             text = "Archived (${archivedSessions.size})",
-                            fontSize = 11.sp,
-                            color = Color(0xFF60A5FA),
+                            fontSize = 12.sp,
+                            color = themeColors.accent,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -366,8 +368,8 @@ fun JarvisNavigationDrawer(
                     } else if (activeTab == DrawerViewTab.TOOLS) {
                         Text(
                             text = "Tools & Workspaces",
-                            fontSize = 11.sp,
-                            color = Color(0xFF60A5FA),
+                            fontSize = 12.sp,
+                            color = themeColors.accent,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -1012,10 +1014,10 @@ fun JarvisNavigationDrawer(
     deleteFolderTarget?.let { folderToDelete ->
         AlertDialog(
             onDismissRequest = { deleteFolderTarget = null },
-            containerColor = Color(0xFF111827),
-            titleContentColor = Color.White,
-            textContentColor = Color(0xFFCBD5E1),
-            title = { Text("Delete \"$folderToDelete\"?", fontWeight = FontWeight.Bold) },
+            containerColor = themeColors.surfaceElevated,
+            titleContentColor = themeColors.textPrimary,
+            textContentColor = themeColors.textSecondary,
+            title = { Text("Delete \"$folderToDelete\"?", fontWeight = FontWeight.SemiBold) },
             text = {
                 Text(
                     "Choose whether to move conversations in \"$folderToDelete\" back to General or permanently delete them.",
@@ -1029,7 +1031,7 @@ fun JarvisNavigationDrawer(
                         onDeleteFolder(folderToDelete, false)
                     }
                 ) {
-                    Text("Move Chats to General", color = Color(0xFF38BDF8))
+                    Text("Move Chats to General", color = themeColors.primary)
                 }
             },
             dismissButton = {
@@ -1040,10 +1042,10 @@ fun JarvisNavigationDrawer(
                             onDeleteFolder(folderToDelete, true)
                         }
                     ) {
-                        Text("Delete All", color = Color(0xFFF87171))
+                        Text("Delete All", color = themeColors.statusRoseRed)
                     }
                     TextButton(onClick = { deleteFolderTarget = null }) {
-                        Text("Cancel", color = Color(0xFF94A3B8))
+                        Text("Cancel", color = themeColors.textSecondary)
                     }
                 }
             }
@@ -1583,108 +1585,109 @@ private fun JarvisToolsDrawerBody(
             }
         }
 
-        DrawerSectionTitle("DEVELOPER TOOLS")
+        val itemAccent = com.example.ui.theme.JarvisTheme.colors.textSecondary
+        DrawerSectionTitle("Developer Tools")
         DrawerRoundedSectionBox {
-            DrawerItem(Icons.Default.Code, "📝 Sora Code Editor", Color(0xFF38BDF8), "drawer_item_ide") {
+            DrawerItem(Icons.Default.Code, "Sora Code Editor", itemAccent, "drawer_item_ide") {
                 onNavigateDestination("ide"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Language, "🌐 Chrome Web Browser", Color(0xFF00E5FF), "drawer_item_browser") {
+            DrawerItem(Icons.Default.Language, "Web Browser", itemAccent, "drawer_item_browser") {
                 onNavigateDestination("browser"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Terminal, "💻 Embedded Linux Terminal", Color(0xFF00E5FF), "drawer_item_terminal") {
+            DrawerItem(Icons.Default.Terminal, "Linux Terminal", itemAccent, "drawer_item_terminal") {
                 onNavigateDestination("terminal"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Build, "📦 Linux Core Engine (352MB)", Color(0xFF10B981), "drawer_item_rootfs") {
+            DrawerItem(Icons.Default.Build, "Linux Core Runtime (352MB)", itemAccent, "drawer_item_rootfs") {
                 onNavigateDestination("rootfs_installer"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Description, "📄 Generated Artifacts Shelf", Color(0xFF00E5FF), "drawer_item_artifacts") {
+            DrawerItem(Icons.Default.Description, "Artifacts Shelf", itemAccent, "drawer_item_artifacts") {
                 onNavigateDestination("artifacts"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Hub, "🤖 Multi-Agent Hub (Claude / OpenCode)", Color(0xFFF472B6), "drawer_item_agent_hub") {
+            DrawerItem(Icons.Default.Hub, "Multi-Agent Hub", itemAccent, "drawer_item_agent_hub") {
                 onNavigateDestination("agent_hub"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.DeveloperMode, "📲 Wireless ADB & God-Mode", Color(0xFF10B981), "drawer_item_adb") {
+            DrawerItem(Icons.Default.DeveloperMode, "Wireless ADB & Control", itemAccent, "drawer_item_adb") {
                 onNavigateDestination("adb_connect"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Cloud, "🖥️ Connect to Desktop PC", Color(0xFF00FFCC), "drawer_item_connect_pc") {
+            DrawerItem(Icons.Default.Cloud, "Connect to Desktop PC", itemAccent, "drawer_item_connect_pc") {
                 onNavigateDestination("connect_pc"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Apps, "⚡ Agentra Mini-Apps Hub", Color(0xFF38BDF8), "drawer_item_mini_apps") {
+            DrawerItem(Icons.Default.Apps, "Agentra Mini-Apps", itemAccent, "drawer_item_mini_apps") {
                 onNavigateDestination("mini_apps"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.AutoMode, "▶️ Live App Runner (:2239)", Color(0xFF10B981), "drawer_item_run_manager") {
+            DrawerItem(Icons.Default.AutoMode, "Live App Runner (:2239)", itemAccent, "drawer_item_run_manager") {
                 onNavigateDestination("run_manager"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Edit, "🗒️ Notes & To-Do Lists", Color(0xFFF59E0B), "drawer_item_notes") {
+            DrawerItem(Icons.Default.Edit, "Notes & Tasks", itemAccent, "drawer_item_notes") {
                 onNavigateDestination("notes"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Extension, "🧩 Plugins & Chrome Extensions", Color(0xFFA78BFA), "drawer_item_plugins") {
+            DrawerItem(Icons.Default.Extension, "Browser Extensions", itemAccent, "drawer_item_plugins") {
                 onNavigateDestination("plugins"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Mic, "🎙️ Full Live Voice Studio", Color(0xFF00E5FF), "drawer_item_voice") {
+            DrawerItem(Icons.Default.Mic, "Live Voice Studio", itemAccent, "drawer_item_voice") {
                 onNavigateDestination("voice"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Terminal, "🐚 Termux Bridge & Permissions", Color(0xFF10B981), "drawer_item_termux_setup") {
+            DrawerItem(Icons.Default.Terminal, "Termux Bridge", itemAccent, "drawer_item_termux_setup") {
                 onNavigateDestination("termux_setup"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Security, "🔐 Permissions", Color(0xFF38BDF8), "drawer_item_permissions") {
+            DrawerItem(Icons.Default.Security, "Permissions", itemAccent, "drawer_item_permissions") {
                 onNavigateDestination("permissions"); onCloseDrawer()
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        DrawerSectionTitle("MULTIMODAL & AI FEATURES")
+        DrawerSectionTitle("Assistant Modules")
         DrawerRoundedSectionBox {
-            DrawerItem(Icons.Default.CameraAlt, "📸 Camera & Vision Analysis", Color(0xFF38BDF8), "drawer_item_vision") {
+            DrawerItem(Icons.Default.CameraAlt, "Camera & Vision", itemAccent, "drawer_item_vision") {
                 onNavigateDestination("vision"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Description, "📄 Document & PDF Reader", Color(0xFFA78BFA), "drawer_item_document") {
+            DrawerItem(Icons.Default.Description, "Document & PDF Reader", itemAccent, "drawer_item_document") {
                 onNavigateDestination("document"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Calculate, "🧮 Optical Math & Code Solver", Color(0xFFF59E0B), "drawer_item_optical_solver") {
+            DrawerItem(Icons.Default.Calculate, "Optical Math & Code Solver", itemAccent, "drawer_item_optical_solver") {
                 onNavigateDestination("optical_solver"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Translate, "🌐 Polyglot Live Translator", Color(0xFF00E5FF), "drawer_item_polyglot") {
+            DrawerItem(Icons.Default.Translate, "Live Translator", itemAccent, "drawer_item_polyglot") {
                 onNavigateDestination("polyglot_diplomat"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.BatteryChargingFull, "🔋 Arc Reactor Telemetry", Color(0xFF10B981), "drawer_item_charging_telemetry") {
+            DrawerItem(Icons.Default.BatteryChargingFull, "Charging Telemetry", itemAccent, "drawer_item_charging_telemetry") {
                 onNavigateDestination("charging_telemetry"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.AutoMode, "⚡ Autonomous Workflows & Macros", Color(0xFFF472B6), "drawer_item_workflow") {
+            DrawerItem(Icons.Default.AutoMode, "Workflows & Macros", itemAccent, "drawer_item_workflow") {
                 onNavigateDestination("workflow"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Notifications, "🔔 Smart Notifications Assistant", Color(0xFF38BDF8), "drawer_item_notifications") {
+            DrawerItem(Icons.Default.Notifications, "Notifications", itemAccent, "drawer_item_notifications") {
                 onNavigateDestination("notifications"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Dashboard, "🎛️ Command Deck Dashboard", Color(0xFF00E5FF), "drawer_item_dashboard_deck") {
+            DrawerItem(Icons.Default.Dashboard, "Command Deck", itemAccent, "drawer_item_dashboard_deck") {
                 onNavigateDestination("dashboard_deck"); onCloseDrawer()
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        DrawerSectionTitle("SECURITY & CONTROLS")
+        DrawerSectionTitle("System & Settings")
         DrawerRoundedSectionBox {
-            DrawerItem(Icons.Default.PictureInPictureAlt, "🫧 Floating ChatHead Bubble", Color(0xFF00E5FF), "drawer_item_floating_bubble") {
+            DrawerItem(Icons.Default.PictureInPictureAlt, "Floating Overlay", itemAccent, "drawer_item_floating_bubble") {
                 onNavigateDestination("floating_bubble"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Security, "🛡️ Space & Safety Shield", Color(0xFF00E5FF), "drawer_item_manage_space") {
+            DrawerItem(Icons.Default.Security, "Storage & Space", itemAccent, "drawer_item_manage_space") {
                 onNavigateDestination("manage_space"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Memory, "🧠 5-Tier Memory Center", Color(0xFF38BDF8), "drawer_item_memory") {
+            DrawerItem(Icons.Default.Memory, "Memory Center", itemAccent, "drawer_item_memory") {
                 onNavigateDestination("memory"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Build, "🎛️ Device & Hardware Controls", Color(0xFF94A3B8), "drawer_item_controls") {
+            DrawerItem(Icons.Default.Build, "Device Controls", itemAccent, "drawer_item_controls") {
                 onNavigateDestination("controls"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.AutoAwesome, "🧙 Setup & Onboarding Wizard", Color(0xFFF59E0B), "drawer_item_onboarding") {
+            DrawerItem(Icons.Default.AutoAwesome, "Setup Wizard", itemAccent, "drawer_item_onboarding") {
                 onNavigateDestination("onboarding"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.SystemUpdate, "🔄 Check for App Updates", Color(0xFF10B981), "drawer_item_check_updates") {
+            DrawerItem(Icons.Default.SystemUpdate, "Check for Updates", itemAccent, "drawer_item_check_updates") {
                 onNavigateDestination("check_updates"); onCloseDrawer()
             }
-            DrawerItem(Icons.Default.Settings, "⚙️ General & API Settings", Color(0xFF94A3B8), "drawer_item_settings") {
+            DrawerItem(Icons.Default.Settings, "Settings", itemAccent, "drawer_item_settings") {
                 onNavigateDestination("settings"); onCloseDrawer()
             }
         }
@@ -1701,21 +1704,22 @@ private fun CreateChatFolderDialog(
     var folderName by remember { mutableStateOf("") }
     var createWorkspaceDir by remember { mutableStateOf(true) }
 
+    val dialogColors = JarvisTheme.colors
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF111827),
-        titleContentColor = Color.White,
-        textContentColor = Color(0xFFCBD5E1),
+        containerColor = dialogColors.surfaceElevated,
+        titleContentColor = dialogColors.textPrimary,
+        textContentColor = dialogColors.textSecondary,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Default.CreateNewFolder,
                     contentDescription = null,
-                    tint = Color(0xFF60A5FA),
+                    tint = dialogColors.primary,
                     modifier = Modifier.size(22.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Create Folder", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Text("Create Folder", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
             }
         },
         text = {
@@ -1723,7 +1727,7 @@ private fun CreateChatFolderDialog(
                 Text(
                     text = "New chats stay inside this selected folder until you switch folders.",
                     fontSize = 12.sp,
-                    color = Color(0xFF94A3B8)
+                    color = dialogColors.textSecondary
                 )
                 OutlinedTextField(
                     value = folderName,
@@ -1731,12 +1735,12 @@ private fun CreateChatFolderDialog(
                     label = { Text("Folder name (e.g. Short Reels, assistant)") },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFF38BDF8),
-                        unfocusedBorderColor = Color(0xFF334155),
-                        focusedLabelColor = Color(0xFF38BDF8),
-                        unfocusedLabelColor = Color(0xFF94A3B8)
+                        focusedTextColor = dialogColors.textPrimary,
+                        unfocusedTextColor = dialogColors.textPrimary,
+                        focusedBorderColor = dialogColors.primary,
+                        unfocusedBorderColor = dialogColors.border,
+                        focusedLabelColor = dialogColors.primary,
+                        unfocusedLabelColor = dialogColors.textSecondary
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1752,14 +1756,14 @@ private fun CreateChatFolderDialog(
                         checked = createWorkspaceDir,
                         onCheckedChange = { createWorkspaceDir = it },
                         colors = CheckboxDefaults.colors(
-                            checkedColor = Color(0xFF38BDF8),
-                            uncheckedColor = Color(0xFF64748B)
+                            checkedColor = dialogColors.primary,
+                            uncheckedColor = dialogColors.textMuted
                         )
                     )
                     Text(
                         text = "Also create coding workspace directory",
                         fontSize = 12.sp,
-                        color = Color(0xFFCBD5E1)
+                        color = dialogColors.textSecondary
                     )
                 }
             }
@@ -1771,14 +1775,14 @@ private fun CreateChatFolderDialog(
                     if (clean.isNotBlank()) onCreate(clean, createWorkspaceDir)
                 },
                 enabled = folderName.trim().isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
+                colors = ButtonDefaults.buttonColors(containerColor = dialogColors.primary)
             ) {
-                Text("Create & Select", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text("Create & Select", color = dialogColors.onPrimary, fontWeight = FontWeight.SemiBold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = Color(0xFF94A3B8))
+                Text("Cancel", color = dialogColors.textSecondary)
             }
         }
     )
@@ -1794,11 +1798,12 @@ private fun RenameTextDialog(
 ) {
     var textValue by remember { mutableStateOf(initialValue) }
 
+    val dialogColors = JarvisTheme.colors
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF111827),
-        titleContentColor = Color.White,
-        title = { Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp) },
+        containerColor = dialogColors.surfaceElevated,
+        titleContentColor = dialogColors.textPrimary,
+        title = { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 17.sp) },
         text = {
             OutlinedTextField(
                 value = textValue,
@@ -1806,12 +1811,12 @@ private fun RenameTextDialog(
                 label = { Text(label) },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFF38BDF8),
-                    unfocusedBorderColor = Color(0xFF334155),
-                    focusedLabelColor = Color(0xFF38BDF8),
-                    unfocusedLabelColor = Color(0xFF94A3B8)
+                    focusedTextColor = dialogColors.textPrimary,
+                    unfocusedTextColor = dialogColors.textPrimary,
+                    focusedBorderColor = dialogColors.primary,
+                    unfocusedBorderColor = dialogColors.border,
+                    focusedLabelColor = dialogColors.primary,
+                    unfocusedLabelColor = dialogColors.textSecondary
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1823,14 +1828,14 @@ private fun RenameTextDialog(
                     if (clean.isNotBlank()) onConfirm(clean)
                 },
                 enabled = textValue.trim().isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
+                colors = ButtonDefaults.buttonColors(containerColor = dialogColors.primary)
             ) {
-                Text("Save", color = Color.White)
+                Text("Save", color = dialogColors.onPrimary)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = Color(0xFF94A3B8))
+                Text("Cancel", color = dialogColors.textSecondary)
             }
         }
     )
@@ -1845,18 +1850,19 @@ private fun MoveSessionFolderDialog(
 ) {
     var newFolderInput by remember { mutableStateOf("") }
 
+    val dialogColors = JarvisTheme.colors
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF111827),
-        titleContentColor = Color.White,
-        textContentColor = Color(0xFFCBD5E1),
-        title = { Text("Move to Folder", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
+        containerColor = dialogColors.surfaceElevated,
+        titleContentColor = dialogColors.textPrimary,
+        textContentColor = dialogColors.textSecondary,
+        title = { Text("Move to Folder", fontWeight = FontWeight.SemiBold, fontSize = 17.sp) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = session.title.ifBlank { "Conversation" },
                     fontSize = 12.sp,
-                    color = Color(0xFF94A3B8),
+                    color = dialogColors.textSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1867,7 +1873,7 @@ private fun MoveSessionFolderDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
-                            .background(if (isCurrent) Color(0xFF1E293B) else Color.Transparent)
+                            .background(if (isCurrent) dialogColors.surfacePill else Color.Transparent)
                             .clickable { onMove(folderName) }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -1879,22 +1885,22 @@ private fun MoveSessionFolderDialog(
                                 Icons.Default.Folder
                             },
                             contentDescription = null,
-                            tint = if (isCurrent) Color(0xFF38BDF8) else Color(0xFF94A3B8),
+                            tint = if (isCurrent) dialogColors.primary else dialogColors.textSecondary,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = folderName,
-                            color = Color.White,
+                            color = dialogColors.textPrimary,
                             fontSize = 13.sp,
-                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
                             modifier = Modifier.weight(1f)
                         )
                         if (isCurrent) {
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = "Current folder",
-                                tint = Color(0xFF38BDF8),
+                                tint = dialogColors.primary,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -1908,13 +1914,13 @@ private fun MoveSessionFolderDialog(
                     OutlinedTextField(
                         value = newFolderInput,
                         onValueChange = { newFolderInput = it },
-                        placeholder = { Text("Or new folder...", fontSize = 12.sp, color = Color(0xFF64748B)) },
+                        placeholder = { Text("Or new folder...", fontSize = 12.sp, color = dialogColors.textMuted) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFF38BDF8),
-                            unfocusedBorderColor = Color(0xFF334155)
+                            focusedTextColor = dialogColors.textPrimary,
+                            unfocusedTextColor = dialogColors.textPrimary,
+                            focusedBorderColor = dialogColors.primary,
+                            unfocusedBorderColor = dialogColors.border
                         ),
                         modifier = Modifier.weight(1f)
                     )
@@ -1925,14 +1931,14 @@ private fun MoveSessionFolderDialog(
                         },
                         enabled = newFolderInput.trim().isNotBlank()
                     ) {
-                        Text("Move", color = Color(0xFF38BDF8), fontSize = 12.sp)
+                        Text("Move", color = dialogColors.primary, fontSize = 12.sp)
                     }
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close", color = Color(0xFF94A3B8))
+                Text("Close", color = dialogColors.textSecondary)
             }
         }
     )
@@ -1954,12 +1960,13 @@ private fun formatRelativeAge(timestampMs: Long): String {
 
 @Composable
 private fun DrawerSectionTitle(title: String) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     Text(
         text = title,
-        color = Color(0xFF94A3B8),
-        fontSize = 10.5.sp,
-        fontWeight = FontWeight.ExtraBold,
-        modifier = Modifier.padding(start = 6.dp, bottom = 8.dp)
+        color = themeColors.textMuted,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
     )
 }
 
@@ -1967,17 +1974,18 @@ private fun DrawerSectionTitle(title: String) {
 private fun DrawerRoundedSectionBox(
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF111827),
-        border = BorderStroke(1.dp, Color(0xFF1F2A3D)),
+        shape = RoundedCornerShape(12.dp),
+        color = themeColors.surface,
+        border = BorderStroke(1.dp, themeColors.border),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             content = content
         )
     }
@@ -1991,11 +1999,11 @@ private fun DrawerItem(
     testTag: String? = null,
     onClick: () -> Unit
 ) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF172033),
-        border = BorderStroke(0.8.dp, Color(0xFF25324B)),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.Transparent,
         modifier = Modifier
             .fillMaxWidth()
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
@@ -2006,13 +2014,13 @@ private fun DrawerItem(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(19.dp))
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = title,
-                color = Color.White,
+                color = themeColors.textPrimary,
                 fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Medium
             )
         }
     }

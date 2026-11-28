@@ -143,8 +143,8 @@ class BouncyOverscrollEffect(
                     targetValue = 0f,
                     initialVelocity = leftoverX * 0.15f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessLow
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow
                     )
                 ) {
                     overscrollX = value
@@ -157,8 +157,8 @@ class BouncyOverscrollEffect(
                     targetValue = 0f,
                     initialVelocity = leftoverY * 0.15f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessLow
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow
                     )
                 ) {
                     overscrollY = value

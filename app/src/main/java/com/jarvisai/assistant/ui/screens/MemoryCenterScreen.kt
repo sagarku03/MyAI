@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.AlertCrimson
+import com.example.ui.theme.JarvisTheme
 import com.example.ui.theme.JarvisElectricBlue
 import com.example.ui.theme.JarvisElevatedSurface
 import com.example.ui.theme.JarvisGlassBorder
@@ -2332,32 +2333,33 @@ private fun HermesConsciousnessVaultTierContent() {
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            val vaultTheme = JarvisTheme.colors
             listOf(
-                "SOUL" to "📜 SOUL.md (Constitution)",
-                "USER" to "👤 USER.md (Dossier)",
-                "AGENT" to "🤖 AGENT.md (UI Quirks & Rules)"
+                "SOUL" to "SOUL.md · Constitution",
+                "USER" to "USER.md · Profile",
+                "AGENT" to "AGENT.md · Rules"
             ).forEach { (tabKey, label) ->
                 val isSelected = selectedDocTab == tabKey
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(
-                            if (isSelected) Brush.horizontalGradient(listOf(Color(0xFF8B5CF6), Color(0xFF6366F1)))
-                            else Brush.horizontalGradient(listOf(Color(0xFF13182C), Color(0xFF13182C)))
+                            if (isSelected) vaultTheme.primary.copy(alpha = 0.16f)
+                            else vaultTheme.surfaceElevated
                         )
                         .border(
                             1.dp,
-                            if (isSelected) Color.White else Color(0xFF8B5CF6).copy(alpha = 0.4f),
-                            RoundedCornerShape(12.dp)
+                            if (isSelected) vaultTheme.primary else vaultTheme.border,
+                            RoundedCornerShape(8.dp)
                         )
                         .clickable { selectedDocTab = tabKey }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Text(
                         text = label,
-                        color = if (isSelected) Color.White else JarvisTextSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        color = if (isSelected) vaultTheme.textPrimary else vaultTheme.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
                     )
                 }
             }
@@ -2457,10 +2459,10 @@ private fun HermesConsciousnessVaultTierContent() {
         if (consciousnessSnap.distilledMacros.isNotEmpty()) {
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "⚡ Distilled Reusable Macro Skills (${consciousnessSnap.distilledMacros.size})",
+                text = "Reusable Macro Skills (${consciousnessSnap.distilledMacros.size})",
                 style = MaterialTheme.typography.titleSmall,
-                color = AccentChampagneGold,
-                fontWeight = FontWeight.ExtraBold
+                color = JarvisTheme.colors.textPrimary,
+                fontWeight = FontWeight.SemiBold
             )
             consciousnessSnap.distilledMacros.forEach { macro ->
                 Box(

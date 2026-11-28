@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.JarvisTheme
 import com.jarvisai.assistant.adb.AdbConnectManager
 import com.jarvisai.assistant.termux.JarvisTermuxBridge
 import com.jarvisai.assistant.ui.updater.ApkUpdateResult
@@ -77,6 +78,7 @@ fun GitHubReleaseUpdateDialog(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val themeColors = JarvisTheme.colors
 
     AlertDialog(
         onDismissRequest = {
@@ -84,11 +86,12 @@ fun GitHubReleaseUpdateDialog(
                 onDismiss()
             }
         },
+        shape = RoundedCornerShape(16.dp),
         title = {
             Text(
-                text = "🚀 Update Available: ${release.newVersion}",
-                color = Color.White,
-                fontWeight = FontWeight.Bold
+                text = "Update Available: ${release.newVersion}",
+                color = themeColors.textPrimary,
+                fontWeight = FontWeight.SemiBold
             )
         },
         text = {
@@ -101,23 +104,23 @@ fun GitHubReleaseUpdateDialog(
             }
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    text = "Current: ${release.currentVersion}  ➔  New: ${release.newVersion}",
-                    color = Color(0xFF00E5FF),
+                    text = "Current: ${release.currentVersion} -> New: ${release.newVersion}",
+                    color = themeColors.primary,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = "What's New in ${release.newVersion}:",
-                    color = Color.White,
+                    color = themeColors.textPrimary,
                     style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF0F172A),
-                    border = BorderStroke(1.dp, Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(10.dp),
+                    color = themeColors.cardSurface,
+                    border = BorderStroke(1.dp, themeColors.border),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -130,14 +133,14 @@ fun GitHubReleaseUpdateDialog(
                                 verticalAlignment = Alignment.Top
                             ) {
                                 Text(
-                                    text = "✦",
-                                    color = Color(0xFF00E5FF),
-                                    fontSize = 11.sp,
+                                    text = "•",
+                                    color = themeColors.primary,
+                                    fontSize = 12.sp,
                                     modifier = Modifier.padding(top = 1.dp, end = 6.dp)
                                 )
                                 Text(
                                     text = item,
-                                    color = Color(0xFFE2E8F0),
+                                    color = themeColors.textSecondary,
                                     style = MaterialTheme.typography.bodySmall,
                                     lineHeight = 18.sp
                                 )
@@ -160,9 +163,9 @@ fun GitHubReleaseUpdateDialog(
                     ) {
                         Text(
                             text = "View GitHub Diff ↗",
-                            color = Color(0xFF38BDF8),
+                            color = themeColors.primary,
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
@@ -172,23 +175,23 @@ fun GitHubReleaseUpdateDialog(
                         LinearProgressIndicator(
                             progress = { updateDownloadProgress / 100f },
                             modifier = Modifier.fillMaxWidth(),
-                            color = Color(0xFF00E5FF)
+                            color = themeColors.primary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Downloading: $updateDownloadProgress% ${if (updateDownloadedMbText.isNotBlank()) "($updateDownloadedMbText)" else ""}".trim(),
-                            color = Color.LightGray,
+                            color = themeColors.textSecondary,
                             style = MaterialTheme.typography.bodySmall
                         )
                     } else {
                         LinearProgressIndicator(
                             modifier = Modifier.fillMaxWidth(),
-                            color = Color(0xFF00E5FF)
+                            color = themeColors.primary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Downloading APK... $updateDownloadedMbText".trim(),
-                            color = Color.LightGray,
+                            color = themeColors.textSecondary,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -298,12 +301,12 @@ fun GitHubReleaseUpdateDialog(
                             }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
+                    colors = ButtonDefaults.buttonColors(containerColor = themeColors.primary)
                 ) {
                     Text(
                         if (isDownloadingUpdate) "Downloading..." else "Update Now",
-                        color = Color(0xFF0A0E17),
-                        fontWeight = FontWeight.Bold
+                        color = themeColors.onPrimary,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             } else {
@@ -315,9 +318,9 @@ fun GitHubReleaseUpdateDialog(
                             )
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
+                    colors = ButtonDefaults.buttonColors(containerColor = themeColors.primary)
                 ) {
-                    Text("Open Releases", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold)
+                    Text("Open Releases", color = themeColors.onPrimary, fontWeight = FontWeight.SemiBold)
                 }
             }
         },
@@ -326,10 +329,10 @@ fun GitHubReleaseUpdateDialog(
                 onClick = onDismiss,
                 enabled = !isDownloadingUpdate
             ) {
-                Text("Later", color = Color.LightGray)
+                Text("Later", color = themeColors.textSecondary)
             }
         },
-        containerColor = Color(0xFF111827)
+        containerColor = themeColors.surfaceElevated
     )
 }
 
@@ -341,10 +344,11 @@ fun AttachmentPickerBottomSheet(
     onPickFiles: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF111827),
-        contentColor = Color.White
+        containerColor = themeColors.surfaceElevated,
+        contentColor = themeColors.textPrimary
     ) {
         Column(
             modifier = Modifier
@@ -353,22 +357,21 @@ fun AttachmentPickerBottomSheet(
                 .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
             Text(
-                text = "ATTACH MEDIA & FILES",
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                color = Color(0xFF00E5FF)
+                text = "Attach Media & Files",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = themeColors.textPrimary
             )
             Spacer(modifier = Modifier.height(14.dp))
-            AttachmentSheetRow("🖼️ Attach Photos", "Pick 1–5 photos from gallery (Zero-permission Photo Picker)") {
+            AttachmentSheetRow("Photos", "Pick 1–5 photos from gallery (Zero-permission Photo Picker)") {
                 onDismiss()
                 onPickPhotos()
             }
-            AttachmentSheetRow("🎬 Attach Videos", "Pick videos to analyze frames or video stream") {
+            AttachmentSheetRow("Videos", "Pick videos to analyze frames or video stream") {
                 onDismiss()
                 onPickVideos()
             }
-            AttachmentSheetRow("📎 Attach Files & Documents", "PDF, Code, TXT, JSON, Markdown, ZIP & more") {
+            AttachmentSheetRow("Files & Documents", "PDF, Code, TXT, JSON, Markdown, ZIP & more") {
                 onDismiss()
                 onPickFiles()
             }
@@ -383,9 +386,11 @@ private fun AttachmentSheetRow(
     subtitle: String,
     onClick: () -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = Color(0xFF1F2937),
+        color = themeColors.cardSurface,
+        border = BorderStroke(1.dp, themeColors.border),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
@@ -396,8 +401,8 @@ private fun AttachmentSheetRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                Text(text = subtitle, color = Color(0xFF94A3B8), fontSize = 11.5.sp)
+                Text(text = title, color = themeColors.textPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
+                Text(text = subtitle, color = themeColors.textSecondary, fontSize = 11.5.sp)
             }
         }
     }
@@ -429,15 +434,18 @@ fun TermuxBridgeSetupDialog(
         }
     }
 
+    val themeColors = JarvisTheme.colors
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF111827),
-        titleContentColor = Color.White,
-        textContentColor = Color(0xFFE2E8F0),
+        shape = RoundedCornerShape(16.dp),
+        containerColor = themeColors.surfaceElevated,
+        titleContentColor = themeColors.textPrimary,
+        textContentColor = themeColors.textSecondary,
         title = {
             Text(
-                text = "🐚 Termux Bridge & Android 16 Setup",
-                fontWeight = FontWeight.Bold,
+                text = "Termux Bridge & Android 16 Setup",
+                fontWeight = FontWeight.SemiBold,
                 fontSize = 16.sp
             )
         },
@@ -445,52 +453,52 @@ fun TermuxBridgeSetupDialog(
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     text = "1) Built-in Agentra Linux Engine: " +
-                        if (isLinuxRootfsInstalled) "✅ Active (0 permissions needed)"
-                        else "⚠️ Pending setup (tap Linux Core Engine in Drawer)",
+                        if (isLinuxRootfsInstalled) "Active (0 permissions needed)"
+                        else "Pending setup (tap Linux Core Engine in Drawer)",
                     fontSize = 12.sp,
-                    color = if (isLinuxRootfsInstalled) Color(0xFF10B981) else Color(0xFFF59E0B)
+                    color = if (isLinuxRootfsInstalled) themeColors.statusEmerald else themeColors.statusAmber
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "2) Android 16 Termux Isolated Bridge (:2238): " +
-                        if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access, Isolated Agentra Runtime)"
-                        else "⚡ 1-Tap Setup Available Below",
+                        if (diag.isLocalBridgeActive) "Connected (Full Command & File Access, Isolated Agentra Runtime)"
+                        else "1-Tap Setup Available Below",
                     fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (diag.isLocalBridgeActive) Color(0xFF10B981) else Color(0xFF38BDF8)
+                    fontWeight = FontWeight.Medium,
+                    color = if (diag.isLocalBridgeActive) themeColors.statusEmerald else themeColors.primary
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "3) All Files Access (Storage): " +
-                        if (diag.hasAllFilesAccess) "✅ Granted" else "❌ Not Granted",
+                        if (diag.hasAllFilesAccess) "Granted" else "Not Granted",
                     fontSize = 12.sp,
-                    color = if (diag.hasAllFilesAccess) Color(0xFF10B981) else Color(0xFFF59E0B)
+                    color = if (diag.hasAllFilesAccess) themeColors.statusEmerald else themeColors.statusAmber
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "4) External Termux App: " +
                         when {
-                            !diag.isTermuxInstalled -> "❌ Not installed"
-                            diag.isPlayStoreTermux -> "⚠️ Play Store Build (Blocks External)"
-                            diag.hasRunCommandPermission -> "✅ Installed + RUN_COMMAND Granted"
-                            else -> "✅ Installed (Android 16 hides Settings toggle)"
+                            !diag.isTermuxInstalled -> "Not installed"
+                            diag.isPlayStoreTermux -> "Play Store Build (Blocks External)"
+                            diag.hasRunCommandPermission -> "Installed + RUN_COMMAND Granted"
+                            else -> "Installed (Android 16 hides Settings toggle)"
                         },
                     fontSize = 12.sp,
                     color = when {
-                        !diag.isTermuxInstalled -> Color(0xFFFCA5A5)
-                        diag.isPlayStoreTermux -> Color(0xFFF59E0B)
-                        else -> Color(0xFF10B981)
+                        !diag.isTermuxInstalled -> themeColors.statusRoseRed
+                        diag.isPlayStoreTermux -> themeColors.statusAmber
+                        else -> themeColors.statusEmerald
                     }
                 )
                 if (diag.blockingReasonSummary.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF0F172A),
+                        color = themeColors.cardSurface,
                         border = BorderStroke(
                             1.dp,
-                            if (diag.hasRunCommandPermission || diag.isLocalBridgeActive) Color(0xFF10B981).copy(alpha = 0.5f)
-                            else Color(0xFF38BDF8).copy(alpha = 0.55f)
+                            if (diag.hasRunCommandPermission || diag.isLocalBridgeActive) themeColors.statusEmerald.copy(alpha = 0.45f)
+                            else themeColors.borderHighlight
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -498,7 +506,7 @@ fun TermuxBridgeSetupDialog(
                             text = diag.blockingReasonSummary,
                             fontSize = 11.5.sp,
                             lineHeight = 16.sp,
-                            color = Color(0xFFE2E8F0),
+                            color = themeColors.textPrimary,
                             modifier = Modifier.padding(10.dp)
                         )
                     }
@@ -526,16 +534,16 @@ fun TermuxBridgeSetupDialog(
                             if (launch != null) context.startActivity(launch)
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                    colors = ButtonDefaults.buttonColors(containerColor = themeColors.statusEmerald),
                     modifier = Modifier
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 48.dp)
                         .testTag("termux_copy_config_button")
                 ) {
                     Text(
-                        "⚡ 1-Tap Android 16 Termux Bridge (Copy & Open)",
-                        color = Color(0xFF0A0E17),
-                        fontWeight = FontWeight.Bold,
+                        "1-Tap Android 16 Termux Bridge (Copy & Open)",
+                        color = themeColors.onPrimary,
+                        fontWeight = FontWeight.SemiBold,
                         fontSize = 12.sp
                     )
                 }
@@ -544,16 +552,16 @@ fun TermuxBridgeSetupDialog(
                 if (!diag.hasAllFilesAccess) {
                     Button(
                         onClick = { com.example.MainActivity.openAllFilesAccessSettings(context) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                        colors = ButtonDefaults.buttonColors(containerColor = themeColors.primary),
                         modifier = Modifier
                             .fillMaxWidth()
                             .defaultMinSize(minHeight = 48.dp)
                             .testTag("termux_all_files_access_button")
                     ) {
                         Text(
-                            "📁 Grant All Files Access (Allow Files)",
-                            color = Color(0xFF0A0E17),
-                            fontWeight = FontWeight.Bold,
+                            "Grant All Files Access (Allow Files)",
+                            color = themeColors.onPrimary,
+                            fontWeight = FontWeight.SemiBold,
                             fontSize = 12.sp
                         )
                     }
@@ -569,16 +577,16 @@ fun TermuxBridgeSetupDialog(
                                 )
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
+                        colors = ButtonDefaults.buttonColors(containerColor = themeColors.statusAmber),
                         modifier = Modifier
                             .fillMaxWidth()
                             .defaultMinSize(minHeight = 48.dp)
                             .testTag("termux_fdroid_download_button")
                     ) {
                         Text(
-                            "📥 Download Official F-Droid Termux APK",
-                            color = Color(0xFF0A0E17),
-                            fontWeight = FontWeight.Bold,
+                            "Download Official F-Droid Termux APK",
+                            color = themeColors.onPrimary,
+                            fontWeight = FontWeight.SemiBold,
                             fontSize = 12.sp
                         )
                     }
@@ -598,16 +606,16 @@ fun TermuxBridgeSetupDialog(
                                 ).show()
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34D399)),
+                        colors = ButtonDefaults.buttonColors(containerColor = themeColors.statusEmerald),
                         modifier = Modifier
                             .fillMaxWidth()
                             .defaultMinSize(minHeight = 48.dp)
                             .testTag("termux_adb_auto_grant_button")
                     ) {
                         Text(
-                            "🔓 1-Tap Auto-Grant via Connected ADB",
-                            color = Color(0xFF0A0E17),
-                            fontWeight = FontWeight.Bold,
+                            "1-Tap Auto-Grant via Connected ADB",
+                            color = themeColors.onPrimary,
+                            fontWeight = FontWeight.SemiBold,
                             fontSize = 12.sp
                         )
                     }
@@ -616,13 +624,13 @@ fun TermuxBridgeSetupDialog(
 
                 OutlinedButton(
                     onClick = onRequestRunCommandPermission,
-                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
+                    border = BorderStroke(1.dp, themeColors.primary.copy(alpha = 0.6f)),
                     modifier = Modifier
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 48.dp)
                         .testTag("termux_request_permission_button")
                 ) {
-                    Text("Request RUN_COMMAND Popup", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("Request RUN_COMMAND Popup", color = themeColors.primary, fontWeight = FontWeight.Medium, fontSize = 12.sp)
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 OutlinedButton(
@@ -634,13 +642,13 @@ fun TermuxBridgeSetupDialog(
                         ).show()
                         com.example.MainActivity.openTermuxPermissionSettings(context)
                     },
-                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.7f)),
+                    border = BorderStroke(1.dp, themeColors.borderHighlight),
                     modifier = Modifier
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 48.dp)
                         .testTag("termux_open_settings_button")
                 ) {
-                    Text("Open App Info (⋮ Allow Restricted)", color = Color(0xFF38BDF8), fontSize = 12.sp)
+                    Text("Open App Info (⋮ Allow Restricted)", color = themeColors.primary, fontSize = 12.sp)
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 TextButton(
@@ -651,8 +659,8 @@ fun TermuxBridgeSetupDialog(
                         .testTag("termux_open_wireless_adb_button")
                 ) {
                     Text(
-                        text = if (adbState.isConnected) "Wireless ADB Connected • Open Panel" else "⚡ Setup Wireless ADB (No PC Auto-Grant)",
-                        color = if (adbState.isConnected) Color(0xFF10B981) else Color(0xFFA78BFA),
+                        text = if (adbState.isConnected) "Wireless ADB Connected • Open Panel" else "Setup Wireless ADB (No PC Auto-Grant)",
+                        color = if (adbState.isConnected) themeColors.statusEmerald else themeColors.textSecondary,
                         fontSize = 11.5.sp
                     )
                 }
@@ -660,7 +668,7 @@ fun TermuxBridgeSetupDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Done", color = Color(0xFF00E5FF))
+                Text("Done", color = themeColors.primary)
             }
         }
     )

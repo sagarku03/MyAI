@@ -144,16 +144,16 @@ fun JarvisStartPage(
                 imageVector = Icons.Default.VisibilityOff,
                 contentDescription = "Private Browsing",
                 tint = JarvisBrowserColors.PrivateAccent,
-                modifier = Modifier.size(34.dp)
+                modifier = Modifier.size(32.dp)
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
         Text(
-            text = if (isPrivate) "AGENTRA PRIVATE" else "AGENTRA",
-            color = if (isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.Coral,
-            fontSize = if (isPrivate) 24.sp else 32.sp,
-            fontWeight = FontWeight.Black,
-            letterSpacing = 3.sp
+            text = if (isPrivate) "Agentra Private" else "Agentra",
+            color = if (isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.TextPrimary,
+            fontSize = if (isPrivate) 22.sp else 28.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.sp
         )
         if (isPrivate) {
             Spacer(modifier = Modifier.height(4.dp))

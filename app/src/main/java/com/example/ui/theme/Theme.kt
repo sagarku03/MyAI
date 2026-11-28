@@ -22,18 +22,18 @@ object JarvisTheme {
         get() = LocalJarvisColors.current
 }
 
-// Apple iOS 26 Continuous Squircle Curvature System
+// Disciplined 4dp Shape Scale
 val JarvisShapes = Shapes(
-    extraSmall = RoundedCornerShape(12.dp),
-    small = RoundedCornerShape(16.dp),
-    medium = RoundedCornerShape(22.dp),
-    large = RoundedCornerShape(28.dp),
-    extraLarge = RoundedCornerShape(36.dp)
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(20.dp)
 )
 
 @Composable
 fun JarvisHudTheme(
-    themeMode: JarvisThemeMode = JarvisThemeMode.ROYAL_PURPLE,
+    themeMode: JarvisThemeMode = JarvisThemeMode.GRAPHITE,
     content: @Composable () -> Unit
 ) {
     val systemInDark = isSystemInDarkTheme()

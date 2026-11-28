@@ -273,18 +273,12 @@ fun LiveVoiceScreen(
         if (availableVoiceModels.isNotEmpty()) availableVoiceModels else SupportedGeminiModels.liveVoiceModels
     }
 
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF04050D),
-                        Color(0xFF090819),
-                        Color(0xFF04050D)
-                    )
-                )
-            )
+            .background(themeColors.background)
             .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.navigationBars))
             .testTag("live_voice_screen")
     ) {
@@ -300,16 +294,15 @@ fun LiveVoiceScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Personality Dropdown Pill
                 Box(modifier = Modifier.weight(1f)) {
                     Surface(
                         onClick = { showPersonalityMenu = true },
-                        shape = RoundedCornerShape(999.dp),
-                        color = Color(0xFF100B22),
-                        border = BorderStroke(1.2.dp, Color(0xFF8B5CF6)),
+                        shape = RoundedCornerShape(10.dp),
+                        color = themeColors.surfaceElevated,
+                        border = BorderStroke(1.dp, themeColors.border),
                         modifier = Modifier
                             .fillMaxWidth()
                             .defaultMinSize(minHeight = 48.dp)
@@ -323,16 +316,16 @@ fun LiveVoiceScreen(
                             Icon(
                                 imageVector = Icons.Default.Person,
                                 contentDescription = "Personality",
-                                tint = Color(0xFFA855F7),
+                                tint = themeColors.accent,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "Personality",
-                                color = Color.White,
+                                color = themeColors.textPrimary,
                                 fontFamily = FontFamily.SansSerif,
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -340,7 +333,7 @@ fun LiveVoiceScreen(
                             Icon(
                                 imageVector = Icons.Default.KeyboardArrowDown,
                                 contentDescription = null,
-                                tint = Color(0xFFCBD5E1),
+                                tint = themeColors.textSecondary,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -351,14 +344,14 @@ fun LiveVoiceScreen(
                         onDismissRequest = { showPersonalityMenu = false },
                         modifier = Modifier
                             .widthIn(min = 240.dp, max = 310.dp)
-                            .background(Color(0xFF111528))
+                            .background(themeColors.surfaceElevated)
                     ) {
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    text = "✨ Speak First (${companionEmotionMood.displayLabel})",
-                                    color = Color(0xFFF472B6),
-                                    fontWeight = FontWeight.Bold,
+                                    text = "Speak First (${companionEmotionMood.displayLabel})",
+                                    color = themeColors.accent,
+                                    fontWeight = FontWeight.Medium,
                                     fontSize = 13.sp
                                 )
                             },
@@ -367,15 +360,15 @@ fun LiveVoiceScreen(
                                 onTriggerProactiveCompanionNow()
                             }
                         )
-                        HorizontalDivider(color = Color(0xFF1E293B))
+                        HorizontalDivider(color = themeColors.divider)
                         PersonalityMode.entries.forEach { mode ->
                             val selected = settings.personalityMode == mode
                             DropdownMenuItem(
                                 text = {
                                     Text(
                                         text = mode.displayName,
-                                        color = if (selected) Color.White else Color(0xFFCBD5E1),
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (selected) themeColors.textPrimary else themeColors.textSecondary,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                                         fontSize = 13.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
@@ -386,7 +379,7 @@ fun LiveVoiceScreen(
                                         Icon(
                                             imageVector = Icons.Default.Check,
                                             contentDescription = "Selected",
-                                            tint = Color(0xFFA855F7),
+                                            tint = themeColors.accent,
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
@@ -400,13 +393,12 @@ fun LiveVoiceScreen(
                     }
                 }
 
-                // Voice Model Dropdown Pill
                 Box(modifier = Modifier.weight(1f)) {
                     Surface(
                         onClick = { showVoiceModelMenu = true },
-                        shape = RoundedCornerShape(999.dp),
-                        color = Color(0xFF071320),
-                        border = BorderStroke(1.2.dp, Color(0xFF06B6D4)),
+                        shape = RoundedCornerShape(10.dp),
+                        color = themeColors.surfaceElevated,
+                        border = BorderStroke(1.dp, themeColors.border),
                         modifier = Modifier
                             .fillMaxWidth()
                             .defaultMinSize(minHeight = 48.dp)
@@ -420,16 +412,16 @@ fun LiveVoiceScreen(
                             Icon(
                                 imageVector = Icons.Default.GraphicEq,
                                 contentDescription = "Voice Model",
-                                tint = Color(0xFF22D3EE),
+                                tint = themeColors.accent,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "Voice Model",
-                                color = Color.White,
+                                color = themeColors.textPrimary,
                                 fontFamily = FontFamily.SansSerif,
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -437,7 +429,7 @@ fun LiveVoiceScreen(
                             Icon(
                                 imageVector = Icons.Default.KeyboardArrowDown,
                                 contentDescription = null,
-                                tint = Color(0xFFCBD5E1),
+                                tint = themeColors.textSecondary,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -448,14 +440,14 @@ fun LiveVoiceScreen(
                         onDismissRequest = { showVoiceModelMenu = false },
                         modifier = Modifier
                             .widthIn(min = 250.dp, max = 320.dp)
-                            .background(Color(0xFF111528))
+                            .background(themeColors.surfaceElevated)
                     ) {
                         Text(
-                            text = "LIVE VOICE MODEL",
-                            color = Color(0xFF22D3EE),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            text = "Voice Model",
+                            color = themeColors.textMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                         )
                         voiceModelsList.forEach { model ->
                             val selected = settings.voiceModel.equals(model.id, ignoreCase = true)
@@ -693,11 +685,11 @@ fun LiveVoiceScreen(
                         isMicMuted -> "Mic Muted"
                         else -> liveUiStatus.displayLabel
                     },
-                    color = if (isSessionActive && isMicMuted) Color(0xFFFDE68A) else Color.White,
+                    color = if (isSessionActive && isMicMuted) themeColors.statusAmber else themeColors.textPrimary,
                     fontFamily = FontFamily.SansSerif,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-0.4).sp,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (-0.2).sp,
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .testTag("live_voice_status_label")
@@ -716,35 +708,35 @@ fun LiveVoiceScreen(
                     text = if (isSessionActive) {
                         "${settings.personalityMode.displayName} • ${settings.language.displayName} • $connectionLabel"
                     } else if (settings.fullDuplexVoiceEnabled) {
-                        "Full-Duplex Phone Call • Speak anytime to interrupt"
+                        "Full-duplex • Speak anytime to interrupt"
                     } else {
                         "Or hold for continuous voice"
                     },
-                    color = Color(0xFF9CA3AF),
+                    color = themeColors.textSecondary,
                     fontFamily = FontFamily.SansSerif,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Normal,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Surface(
                     onClick = { onToggleFullDuplexVoice(!settings.fullDuplexVoiceEnabled) },
-                    shape = RoundedCornerShape(999.dp),
-                    color = if (settings.fullDuplexVoiceEnabled) Color(0xFF072320) else Color(0xFF161329),
+                    shape = RoundedCornerShape(8.dp),
+                    color = themeColors.surfaceElevated,
                     border = BorderStroke(
                         1.dp,
-                        if (settings.fullDuplexVoiceEnabled) Color(0xFF10B981).copy(alpha = 0.7f) else Color(0xFF64748B).copy(alpha = 0.5f)
+                        if (settings.fullDuplexVoiceEnabled) themeColors.statusEmerald.copy(alpha = 0.50f) else themeColors.border
                     ),
                     modifier = Modifier
-                        .defaultMinSize(minHeight = 48.dp)
+                        .defaultMinSize(minHeight = 40.dp)
                         .testTag("live_voice_duplex_badge")
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -753,19 +745,18 @@ fun LiveVoiceScreen(
                                 .size(8.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (settings.fullDuplexVoiceEnabled) Color(0xFF34D399) else Color(0xFF94A3B8)
+                                    if (settings.fullDuplexVoiceEnabled) themeColors.statusEmerald else themeColors.textMuted
                                 )
                         )
                         Text(
                             text = if (settings.fullDuplexVoiceEnabled) {
-                                "FULL-DUPLEX • AEC • BARGE-IN"
+                                "Full-duplex • Barge-in"
                             } else {
-                                "ECHO-GUARD SAFE MODE"
+                                "Echo-guard mode"
                             },
-                            color = if (settings.fullDuplexVoiceEnabled) Color(0xFF6EE7B7) else Color(0xFFCBD5E1),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.6.sp
+                            color = if (settings.fullDuplexVoiceEnabled) themeColors.statusEmerald else themeColors.textSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
@@ -818,25 +809,20 @@ fun LiveVoiceScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Mute / Unmute Neon Purple Pill
-                val muteBrush = if (isMicMuted) {
-                    Brush.horizontalGradient(listOf(Color(0xFF5A370A), Color(0xFF78450B)))
-                } else {
-                    Brush.horizontalGradient(listOf(Color(0xFF170E2E), Color(0xFF281652)))
-                }
-                val muteBorder = if (isMicMuted) Color(0xFFF59E0B) else Color(0xFF8B5CF6)
+                val muteBg = if (isMicMuted) themeColors.statusAmber.copy(alpha = 0.16f) else themeColors.surfaceElevated
+                val muteBorder = if (isMicMuted) themeColors.statusAmber else themeColors.border
 
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(54.dp)
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(muteBrush)
-                        .border(1.3.dp, muteBorder, RoundedCornerShape(999.dp))
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(muteBg)
+                        .border(1.dp, muteBorder, RoundedCornerShape(12.dp))
                         .semantics {
                             role = Role.Button
                             contentDescription = when {
@@ -863,31 +849,25 @@ fun LiveVoiceScreen(
                         Icon(
                             imageVector = if (isMicMuted) Icons.Default.Mic else Icons.Default.MicOff,
                             contentDescription = if (isMicMuted) "Unmute Microphone" else "Mute Microphone",
-                            tint = Color.White,
+                            tint = if (isMicMuted) themeColors.statusAmber else themeColors.textPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                         Text(
                             text = if (isMicMuted) "Unmute" else "Mute",
-                            color = Color.White,
+                            color = if (isMicMuted) themeColors.statusAmber else themeColors.textPrimary,
                             fontFamily = FontFamily.SansSerif,
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
 
-                // End Call Vivid Crimson Pill
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(54.dp)
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(Color(0xFFEF4444), Color(0xFFDC2626), Color(0xFFB91C1C))
-                            )
-                        )
-                        .border(1.2.dp, Color(0xFFFCA5A5).copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(themeColors.statusRoseRed)
                         .clickable {
                             if (isSessionActive) {
                                 onStopSession()
@@ -912,31 +892,29 @@ fun LiveVoiceScreen(
                             text = "End",
                             color = Color.White,
                             fontFamily = FontFamily.SansSerif,
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // 4. BOTTOM COMPOSER PILL: [ 💬 ]  Type a message...  [ ➤ ]
+            // 4. BOTTOM COMPOSER BAR: [ Transcript ]  Type a message...  [ Send ]
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, bottom = 14.dp)
-                    .height(58.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xFF0C0F1F))
+                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .height(56.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(themeColors.surfaceElevated)
                     .border(
-                        width = 1.2.dp,
-                        brush = Brush.horizontalGradient(
-                            listOf(Color(0xFF7C3AED), Color(0xFF6D28D9))
-                        ),
-                        shape = RoundedCornerShape(999.dp)
+                        width = 1.dp,
+                        color = themeColors.border,
+                        shape = RoundedCornerShape(12.dp)
                     )
-                    .padding(horizontal = 6.dp),
+                    .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
@@ -1537,62 +1515,49 @@ private fun NeonMicVoiceOrb(
     onHoldOrb: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     val currentOnTapOrb by rememberUpdatedState(onTapOrb)
     val currentOnHoldOrb by rememberUpdatedState(onHoldOrb)
-    val transition = rememberInfiniteTransition(label = "neon_orb")
-    val pulse by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "orb_pulse"
-    )
     val levelBoost by animateFloatAsState(
         targetValue = if (isSessionActive && !isMicMuted) audioLevel.coerceIn(0f, 1f) else 0f,
         animationSpec = tween(durationMillis = 90),
         label = "orb_audio"
     )
+    val ringPulse = if (isSessionActive && !isMicMuted && (status == AssistantStatus.THINKING || status == AssistantStatus.LISTENING)) {
+        val transition = rememberInfiniteTransition(label = "voice_state_breath")
+        val breath by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "orb_breath"
+        )
+        breath
+    } else {
+        0f
+    }
 
-    val ringBrush = remember {
-        Brush.horizontalGradient(
-            colors = listOf(
-                Color(0xFFC026D3).copy(alpha = 0.72f),
-                Color(0xFF8B5CF6).copy(alpha = 0.65f),
-                Color(0xFF06B6D4).copy(alpha = 0.72f),
-                Color(0xFF38BDF8).copy(alpha = 0.85f)
-            )
-        )
+    val stateColor = when {
+        !isSessionActive -> themeColors.accent
+        isMicMuted -> themeColors.statusAmber
+        status == AssistantStatus.LISTENING -> themeColors.statusEmerald
+        status == AssistantStatus.THINKING -> themeColors.statusAmber
+        status == AssistantStatus.SPEAKING -> themeColors.accent
+        else -> themeColors.accent
     }
-    val rimHighlightBrush = remember {
-        Brush.horizontalGradient(
-            colors = listOf(
-                Color(0xFFF5D0FE).copy(alpha = 0.92f),
-                Color.White.copy(alpha = 0.85f),
-                Color(0xFF67E8F9).copy(alpha = 0.95f)
-            )
-        )
-    }
-    val ringSpecs = remember { listOf(0.86f to 1.2f, 0.77f to 1.8f, 0.68f to 2.4f) }
-    val coreColors = remember {
-        listOf(
-            Color(0xFFD946EF),
-            Color(0xFF7C3AED),
-            Color(0xFF2563EB),
-            Color(0xFF06B6D4)
-        )
-    }
+    val ringSpecs = remember { listOf(0.84f to 1.dp, 0.72f to 1.5.dp) }
 
     Box(
         modifier = modifier
-            .size(230.dp)
+            .size(216.dp)
             .semantics {
                 role = Role.Button
                 contentDescription = when {
                     !isSessionActive -> "Tap to Speak"
                     isMicMuted -> "Mic Muted, Tap to Unmute"
-                    else -> "Active Voice Orb, Tap to Mute or Interrupt"
+                    else -> "Active Voice Control, Tap to Mute or Interrupt"
                 }
             }
             .pointerInput(Unit) {
@@ -1607,77 +1572,41 @@ private fun NeonMicVoiceOrb(
             val cx = size.width / 2f
             val cy = size.height / 2f
             val maxR = size.minDimension / 2f
-            val coreR = maxR * (0.52f + pulse * 0.02f + levelBoost * 0.05f)
+            val coreR = maxR * (0.50f + ringPulse * 0.02f + levelBoost * 0.06f)
 
-            // Ambient purple + cyan nebula behind orb
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF9333EA).copy(alpha = if (isSessionActive) 0.44f else 0.30f),
-                        Color(0xFF2563EB).copy(alpha = 0.16f),
-                        Color.Transparent
-                    ),
-                    center = Offset(cx - maxR * 0.14f, cy),
-                    radius = maxR * 0.98f
-                ),
-                radius = maxR,
-                center = Offset(cx, cy)
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF06B6D4).copy(alpha = if (isSessionActive) 0.38f else 0.24f),
-                        Color.Transparent
-                    ),
-                    center = Offset(cx + maxR * 0.18f, cy),
-                    radius = maxR * 0.90f
-                ),
-                radius = maxR,
-                center = Offset(cx, cy)
-            )
-
-            // Outer Concentric Tech Rings
-            ringSpecs.forEachIndexed { idx, (ratio, strokeDp) ->
-                val ringR = maxR * (ratio + pulse * 0.014f * (idx + 1))
+            ringSpecs.forEachIndexed { idx, (ratio, strokeWidthDp) ->
+                val ringR = maxR * (ratio + levelBoost * 0.04f + ringPulse * 0.015f * (idx + 1))
                 drawCircle(
-                    brush = ringBrush,
+                    color = stateColor.copy(alpha = if (isSessionActive) 0.28f + idx * 0.16f else 0.16f),
                     radius = ringR,
                     center = Offset(cx, cy),
-                    style = Stroke(width = strokeDp.dp.toPx()),
-                    alpha = (0.30f + idx * 0.18f + levelBoost * 0.25f).coerceAtMost(0.95f)
+                    style = Stroke(width = strokeWidthDp.toPx())
                 )
             }
 
-            // Radiant Gradient Inner Core Sphere
             drawCircle(
-                brush = Brush.linearGradient(
-                    colors = coreColors,
-                    start = Offset(cx - coreR, cy - coreR * 0.4f),
-                    end = Offset(cx + coreR, cy + coreR * 0.5f)
-                ),
+                color = stateColor.copy(alpha = if (isSessionActive) 0.18f else 0.10f),
                 radius = coreR,
                 center = Offset(cx, cy)
             )
-
-            // Glossy inner rim highlight
             drawCircle(
-                brush = rimHighlightBrush,
+                color = stateColor.copy(alpha = if (isSessionActive) 0.85f else 0.45f),
                 radius = coreR,
                 center = Offset(cx, cy),
-                style = Stroke(width = 3.2.dp.toPx())
+                style = Stroke(width = 2.dp.toPx())
             )
         }
 
         val micTint = when {
-            isMicMuted -> Color(0xFFFDE68A)
-            status == AssistantStatus.SPEAKING -> Color(0xFFE0F2FE)
-            else -> Color.White
+            isMicMuted -> themeColors.statusAmber
+            isSessionActive -> stateColor
+            else -> themeColors.textPrimary
         }
         Icon(
             imageVector = if (isMicMuted && isSessionActive) Icons.Default.MicOff else Icons.Default.Mic,
             contentDescription = if (isSessionActive) "Voice Active" else "Tap to Speak",
             tint = micTint,
-            modifier = Modifier.size(56.dp)
+            modifier = Modifier.size(48.dp)
         )
     }
 }
@@ -1689,23 +1618,28 @@ private fun NeonPurpleCyanWaveform(
     status: AssistantStatus,
     modifier: Modifier = Modifier
 ) {
-    val transition = rememberInfiniteTransition(label = "neon_wave")
-    val phase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2f * PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1800, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "wave_phase"
-    )
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
+    val phase = if (isActive) {
+        val transition = rememberInfiniteTransition(label = "voice_wave")
+        val p by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = (2f * PI).toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1600, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "wave_phase"
+        )
+        p
+    } else {
+        0f
+    }
     val smoothLevel by animateFloatAsState(
         targetValue = if (isActive) audioLevel.coerceIn(0.08f, 1f) else 0f,
         animationSpec = tween(durationMillis = 85),
         label = "wave_level"
     )
 
-    // Symmetrical bar profile matching mockup (dots at edges, peaking cleanly in middle)
     val barWeights = remember {
         listOf(
             0.05f, 0.05f, 0.06f, 0.14f, 0.09f, 0.24f, 0.16f, 0.34f,
@@ -1714,18 +1648,11 @@ private fun NeonPurpleCyanWaveform(
             0.26f, 0.34f, 0.18f, 0.22f, 0.12f, 0.07f, 0.05f, 0.05f
         )
     }
-    val barColors = remember(barWeights) {
-        val count = barWeights.size
-        List(count) { idx ->
-            val progress = idx.toFloat() / (count - 1).coerceAtLeast(1)
-            val base = lerpNeonColor(
-                start = Color(0xFF9333EA),
-                mid = Color(0xFF7C3AED),
-                end = Color(0xFF22D3EE),
-                fraction = progress
-            )
-            base.copy(alpha = if (barWeights[idx] < 0.08f) 0.55f else 0.95f)
-        }
+    val activeBarColor = when (status) {
+        AssistantStatus.LISTENING -> themeColors.statusEmerald
+        AssistantStatus.THINKING -> themeColors.statusAmber
+        AssistantStatus.SPEAKING -> themeColors.accent
+        AssistantStatus.IDLE -> themeColors.textMuted
     }
 
     Canvas(modifier = modifier) {
@@ -1733,22 +1660,7 @@ private fun NeonPurpleCyanWaveform(
         val slotWidth = size.width / barCount
         val barWidth = (slotWidth * 0.46f).coerceIn(3.dp.toPx(), 6.dp.toPx())
         val centerY = size.height / 2f
-        val maxHalfHeight = size.height * 0.46f
-
-        // Soft purple-cyan center glow behind waveform
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Color(0xFF8B5CF6).copy(alpha = if (isActive) 0.28f else 0.16f),
-                    Color(0xFF06B6D4).copy(alpha = if (isActive) 0.18f else 0.10f),
-                    Color.Transparent
-                ),
-                center = Offset(size.width / 2f, centerY),
-                radius = size.width * 0.38f
-            ),
-            radius = size.width * 0.38f,
-            center = Offset(size.width / 2f, centerY)
-        )
+        val maxHalfHeight = size.height * 0.44f
 
         val cornerR = CornerRadius(barWidth / 2f, barWidth / 2f)
         val statusScale = if (status == AssistantStatus.SPEAKING) 1.0f else 0.88f
@@ -1758,8 +1670,7 @@ private fun NeonPurpleCyanWaveform(
                 val ripple = 0.5f + 0.5f * sin(phase * 1.8f + idx * 0.55f)
                 (baseWeight * (0.35f + smoothLevel * 0.65f * ripple) * statusScale).coerceIn(0.06f, 1f)
             } else {
-                val gentleBreath = 0.86f + 0.14f * sin(phase + idx * 0.45f)
-                (baseWeight * gentleBreath).coerceIn(0.05f, 0.96f)
+                (baseWeight * 0.35f).coerceIn(0.06f, 0.40f)
             }
 
             val barHeight = (maxHalfHeight * 2f * waveMotion).coerceAtLeast(barWidth)
@@ -1767,7 +1678,11 @@ private fun NeonPurpleCyanWaveform(
             val top = centerY - barHeight / 2f
 
             drawRoundRect(
-                color = barColors[idx],
+                color = if (isActive) {
+                    activeBarColor.copy(alpha = if (baseWeight < 0.08f) 0.45f else 0.90f)
+                } else {
+                    themeColors.border
+                },
                 topLeft = Offset(left, top),
                 size = Size(barWidth, barHeight),
                 cornerRadius = cornerR,

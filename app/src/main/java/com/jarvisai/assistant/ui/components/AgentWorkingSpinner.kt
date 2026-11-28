@@ -48,9 +48,9 @@ fun AgentWorkingSpinner(
     modifier: Modifier = Modifier,
     size: Dp = 28.dp,
     label: String? = null,
-    primaryColor: Color = Color(0xFF38BDF8),
-    secondaryColor: Color = Color(0xFF6366F1),
-    accentColor: Color = Color(0xFF10B981)
+    primaryColor: Color = Color(0xFF5B8DEF),
+    secondaryColor: Color = Color(0xFF94A3B8),
+    accentColor: Color = Color(0xFF34D399)
 ) {
     val transition = rememberInfiniteTransition(label = "agent_working_spinner")
 
@@ -96,12 +96,11 @@ fun AgentWorkingSpinner(
                 val maxRadius = this.size.minDimension / 2f
                 val strokeWidth = (maxRadius * 0.14f).coerceAtLeast(2f)
 
-                // Subtle radial aura
+                // Restrained radial pulse indicator
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            primaryColor.copy(alpha = 0.28f * radarPulse),
-                            secondaryColor.copy(alpha = 0.10f * radarPulse),
+                            primaryColor.copy(alpha = 0.14f * radarPulse),
                             Color.Transparent
                         ),
                         center = center,
@@ -164,8 +163,8 @@ fun AgentWorkingSpinner(
     } else {
         Surface(
             modifier = modifier,
-            shape = RoundedCornerShape(999.dp),
-            color = Color(0xFF111827).copy(alpha = 0.9f)
+            shape = RoundedCornerShape(8.dp),
+            color = Color(0xFF15171C)
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),

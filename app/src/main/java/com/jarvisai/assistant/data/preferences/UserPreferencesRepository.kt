@@ -35,9 +35,9 @@ class UserPreferencesRepository(private val context: Context) {
         val language = SupportedLanguage.entries.find { it.name == languageName }
             ?: SupportedLanguage.HINGLISH
 
-        val themeName = prefs[Keys.THEME_MODE] ?: JarvisThemeMode.ROYAL_PURPLE.name
+        val themeName = prefs[Keys.THEME_MODE] ?: JarvisThemeMode.GRAPHITE.name
         val themeMode = JarvisThemeMode.entries.find { it.name == themeName }
-            ?: JarvisThemeMode.ROYAL_PURPLE
+            ?: JarvisThemeMode.GRAPHITE
 
         val paletteName = prefs[Keys.THEME_PALETTE]
         val themePalette = if (paletteName != null) {
@@ -350,8 +350,8 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun updateThemeDisplayMode(displayMode: ThemeDisplayMode) {
         context.jarvisDataStore.edit { prefs ->
             prefs[Keys.THEME_DISPLAY_MODE] = displayMode.name
-            val currentPaletteName = prefs[Keys.THEME_PALETTE] ?: ThemePalette.ROYAL_PURPLE.name
-            val palette = ThemePalette.entries.find { it.name == currentPaletteName } ?: ThemePalette.ROYAL_PURPLE
+            val currentPaletteName = prefs[Keys.THEME_PALETTE] ?: ThemePalette.GRAPHITE.name
+            val palette = ThemePalette.entries.find { it.name == currentPaletteName } ?: ThemePalette.GRAPHITE
             val resolvedThemeMode = resolveThemeMode(palette, displayMode)
             prefs[Keys.THEME_MODE] = resolvedThemeMode.name
         }
@@ -361,11 +361,13 @@ class UserPreferencesRepository(private val context: Context) {
         return when (displayMode) {
             ThemeDisplayMode.SYSTEM -> JarvisThemeMode.SYSTEM_DEFAULT
             ThemeDisplayMode.LIGHT -> when (palette) {
+                ThemePalette.GRAPHITE -> JarvisThemeMode.GRAPHITE_LIGHT
                 ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_LIGHT
                 ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_LIGHT
                 ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_LIGHT
             }
             ThemeDisplayMode.DARK -> when (palette) {
+                ThemePalette.GRAPHITE -> JarvisThemeMode.GRAPHITE_DARK
                 ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_DARK
                 ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_DARK
                 ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_DARK

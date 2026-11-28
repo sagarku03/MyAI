@@ -71,6 +71,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.AccentChampagneGold
+import com.example.ui.theme.JarvisTheme
 import com.example.ui.theme.AccentMintEmerald
 import com.example.ui.theme.AccentRosePink
 import com.example.ui.theme.AccentSkyCyan
@@ -139,29 +140,21 @@ fun AgentHubScreen(
     }
     var voiceNoteReplyText by remember { mutableStateOf("") }
 
+    val themeColors = JarvisTheme.colors
     Column(modifier = Modifier.fillMaxSize()) {
-        // 1. APPLE iOS 26 FLOATING CAPSULE HEADER
+        // 1. MATTE WORKBENCH HEADER
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(
-                            Color(0xFF231D42).copy(alpha = 0.92f),
-                            Color(0xFF162038).copy(alpha = 0.94f)
-                        )
-                    )
-                )
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(themeColors.surface)
                 .border(
-                    1.2.dp,
-                    Brush.horizontalGradient(
-                        listOf(RoyalPurplePrimary, AccentSkyCyan, AccentChampagneGold)
-                    ),
-                    RoundedCornerShape(24.dp)
+                    1.dp,
+                    themeColors.border,
+                    RoundedCornerShape(12.dp)
                 )
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -175,13 +168,9 @@ fun AgentHubScreen(
                     Box(
                         modifier = Modifier
                             .size(40.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(RoyalPurplePrimary, RoyalIndigoAccent)
-                                )
-                            )
-                            .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(13.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(themeColors.surfaceElevated)
+                            .border(1.dp, themeColors.border, RoundedCornerShape(8.dp))
                             .clickable(onClick = onBack)
                             .testTag("agent_hub_back_btn"),
                         contentAlignment = Alignment.Center
@@ -189,108 +178,74 @@ fun AgentHubScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(AccentChampagneGold, AccentRosePink)
-                                )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Terminal,
-                            contentDescription = null,
-                            tint = Color.White,
+                            tint = themeColors.textPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
 
                     Column {
                         Text(
-                            text = "Agent Studio Hub",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Color.White,
-                            fontWeight = FontWeight.Black
+                            text = "Agent Hub",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = themeColors.textPrimary,
+                            fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "PrivateAgent 3D Bust • Air Gestures • ADS-B • SOUL.md",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AccentSkyCyan,
-                            fontWeight = FontWeight.Bold
+                            text = "Terminal, sensors, macros & tools",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = themeColors.textSecondary
                         )
                     }
                 }
 
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(AccentMintEmerald.copy(alpha = 0.22f))
-                        .border(1.dp, AccentMintEmerald, RoundedCornerShape(999.dp))
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(themeColors.surfaceElevated)
+                        .border(1.dp, themeColors.border, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = "ONLINE",
-                        color = AccentMintEmerald,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        text = "Online",
+                        color = themeColors.statusEmerald,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
         }
 
-        // 2. MULTI-COLOR BENTO PILL TABS
+        // 2. TAB STRIP
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             AgentHubTab.entries.forEach { tab ->
                 val isSelected = selectedTab == tab
-                val tabColor = when (tab) {
-                    AgentHubTab.TERMINAL -> AccentSkyCyan
-                    AgentHubTab.SECURITY -> AccentRosePink
-                    AgentHubTab.DRIVING -> AccentMintEmerald
-                    AgentHubTab.MACROS -> AccentChampagneGold
-                    AgentHubTab.VOICE_NOTES -> RoyalPurplePrimary
-                    AgentHubTab.WALLPAPER -> RoyalIndigoAccent
-                }
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(
-                            if (isSelected) {
-                                Brush.horizontalGradient(listOf(tabColor, RoyalPurplePrimary))
-                            } else {
-                                Brush.horizontalGradient(
-                                    listOf(Color(0xFF191F36), Color(0xFF191F36))
-                                )
-                            }
+                            if (isSelected) themeColors.accent else themeColors.surface
                         )
                         .border(
                             width = 1.dp,
-                            color = if (isSelected) Color.White.copy(alpha = 0.55f) else tabColor.copy(alpha = 0.35f),
-                            shape = RoundedCornerShape(16.dp)
+                            color = if (isSelected) themeColors.accent else themeColors.border,
+                            shape = RoundedCornerShape(8.dp)
                         )
                         .clickable { selectedTab = tab }
-                        .padding(horizontal = 14.dp, vertical = 9.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                         .testTag("tab_${tab.name.lowercase()}"),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = tab.label,
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (isSelected) Color.White else TextLavenderMuted,
-                        fontWeight = FontWeight.ExtraBold
+                        color = if (isSelected) themeColors.onPrimary else themeColors.textSecondary,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
                     )
                 }
             }

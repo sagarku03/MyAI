@@ -205,57 +205,38 @@ fun TextChatScreen(
             onBackClick = onBack
         )
 
-        // 2. APPLE iOS 26 MULTI-PALETTE CONTROL DOCK (New Chat | Sessions | Clear + Language Pills)
+        // 2. CLEAN MATTE CONTROL DOCK (New Chat | Sessions | Clear + Language Selector)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 760.dp)
                 .align(Alignment.CenterHorizontally)
-                .padding(horizontal = 14.dp),
+                .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(
-                        themeColors.surface.copy(alpha = if (themeColors.isDark) 0.88f else 0.94f)
-                    )
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(themeColors.surface)
                     .border(
                         1.dp,
-                        Brush.horizontalGradient(
-                            listOf(
-                                themeColors.glassRimTop,
-                                themeColors.borderHighlight,
-                                themeColors.glassRimBottom
-                            )
-                        ),
-                        RoundedCornerShape(22.dp)
+                        themeColors.border,
+                        RoundedCornerShape(12.dp)
                     )
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left Action Squircle Pills
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Theme Primary & Accent New Chat Squircle
                     Box(
                         modifier = Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(themeColors.accent, themeColors.primary)
-                                )
-                            )
-                            .border(
-                                1.dp,
-                                themeColors.onPrimary.copy(alpha = 0.45f),
-                                RoundedCornerShape(13.dp)
-                            )
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(themeColors.accent)
                             .clickable(onClick = onNewChat)
                             .testTag("btn_new_chat"),
                         contentAlignment = Alignment.Center
@@ -268,27 +249,17 @@ fun TextChatScreen(
                         )
                     }
 
-                    // Theme Accent Sessions Drawer Squircle
                     Box(
                         modifier = Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(13.dp))
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(8.dp))
                             .background(
-                                if (showHistorySheet) {
-                                    Brush.linearGradient(listOf(themeColors.accent, themeColors.primary))
-                                } else {
-                                    Brush.linearGradient(
-                                        listOf(
-                                            themeColors.surfacePill,
-                                            themeColors.accent.copy(alpha = 0.18f)
-                                        )
-                                    )
-                                }
+                                if (showHistorySheet) themeColors.accent else themeColors.surfaceElevated
                             )
                             .border(
                                 1.dp,
-                                themeColors.accent.copy(alpha = 0.65f),
-                                RoundedCornerShape(13.dp)
+                                if (showHistorySheet) themeColors.accent else themeColors.border,
+                                RoundedCornerShape(8.dp)
                             )
                             .clickable { showHistorySheet = !showHistorySheet }
                             .testTag("btn_toggle_sessions"),
@@ -297,22 +268,21 @@ fun TextChatScreen(
                         Icon(
                             imageVector = Icons.Default.History,
                             contentDescription = "Chat Sessions (${sessions.size})",
-                            tint = if (showHistorySheet) themeColors.onPrimary else themeColors.accent,
+                            tint = if (showHistorySheet) themeColors.onPrimary else themeColors.textPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
 
                     if (sessions.isNotEmpty()) {
-                        // Rose Red Clear History Squircle
                         Box(
                             modifier = Modifier
-                                .size(42.dp)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(themeColors.statusRoseRed.copy(alpha = 0.18f))
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(themeColors.statusRoseRed.copy(alpha = 0.12f))
                                 .border(
                                     1.dp,
-                                    themeColors.statusRoseRed.copy(alpha = 0.65f),
-                                    RoundedCornerShape(13.dp)
+                                    themeColors.statusRoseRed.copy(alpha = 0.45f),
+                                    RoundedCornerShape(8.dp)
                                 )
                                 .clickable { showClearAllConfirm = true }
                                 .testTag("btn_clear_chat_history"),
@@ -330,13 +300,12 @@ fun TextChatScreen(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Right: iOS Segmented Language Pills
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(themeColors.surfacePill)
-                        .border(1.dp, themeColors.border.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
-                        .padding(3.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(themeColors.surfaceElevated)
+                        .border(1.dp, themeColors.border, RoundedCornerShape(8.dp))
+                        .padding(4.dp)
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -345,17 +314,9 @@ fun TextChatScreen(
                         val selected = settings.language == lang
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
+                                .clip(RoundedCornerShape(6.dp))
                                 .background(
-                                    if (selected) {
-                                        Brush.horizontalGradient(
-                                            listOf(themeColors.accent, themeColors.primary)
-                                        )
-                                    } else {
-                                        Brush.horizontalGradient(
-                                            listOf(Color.Transparent, Color.Transparent)
-                                        )
-                                    }
+                                    if (selected) themeColors.accent else Color.Transparent
                                 )
                                 .clickable { onSelectLanguage(lang) }
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
@@ -365,22 +326,21 @@ fun TextChatScreen(
                                 text = lang.displayName,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (selected) themeColors.onPrimary else themeColors.textSecondary,
-                                fontWeight = FontWeight.ExtraBold
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
                             )
                         }
                     }
                 }
             }
 
-            // Memory Saved Notification Pill Banner
             AnimatedVisibility(visible = !memorySavedNotification.isNullOrBlank()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(themeColors.statusEmerald.copy(alpha = 0.16f))
-                        .border(1.dp, themeColors.statusEmerald.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(themeColors.statusEmerald.copy(alpha = 0.12f))
+                        .border(1.dp, themeColors.statusEmerald.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -399,12 +359,12 @@ fun TextChatScreen(
                             text = memorySavedNotification.orEmpty(),
                             style = MaterialTheme.typography.bodySmall,
                             color = themeColors.textPrimary,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Medium
                         )
                     }
                     IconButton(
                         onClick = onDismissMemoryNotification,
-                        modifier = Modifier.size(26.dp)
+                        modifier = Modifier.size(28.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
@@ -693,25 +653,12 @@ fun TextChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                themeColors.inputBackground,
-                                themeColors.surfaceElevated
-                            )
-                        )
-                    )
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(themeColors.inputBackground)
                     .border(
-                        width = 1.4.dp,
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(
-                                themeColors.accent,
-                                themeColors.primary,
-                                themeColors.secondary
-                            )
-                        ),
-                        shape = RoundedCornerShape(28.dp)
+                        width = 1.dp,
+                        color = themeColors.border,
+                        shape = RoundedCornerShape(14.dp)
                     )
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -858,33 +805,18 @@ private fun EmptyChatExperience(
             .padding(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Adaptive Theme Hero Banner Card
+        // Adaptive Theme Header Card
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(28.dp))
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            themeColors.primary,
-                            themeColors.accent
-                        ),
-                        start = Offset(0f, 0f),
-                        end = Offset(800f, 600f)
-                    )
-                )
+                .clip(RoundedCornerShape(12.dp))
+                .background(themeColors.surfaceElevated)
                 .border(
-                    width = 1.4.dp,
-                    brush = Brush.horizontalGradient(
-                        listOf(
-                            themeColors.onPrimary.copy(alpha = 0.55f),
-                            themeColors.secondary,
-                            themeColors.accent
-                        )
-                    ),
-                    shape = RoundedCornerShape(28.dp)
+                    width = 1.dp,
+                    color = themeColors.border,
+                    shape = RoundedCornerShape(12.dp)
                 )
-                .padding(20.dp)
+                .padding(16.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -893,39 +825,39 @@ private fun EmptyChatExperience(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(themeColors.onPrimary.copy(alpha = 0.22f)),
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(themeColors.primary.copy(alpha = 0.14f))
+                            .border(1.dp, themeColors.primary.copy(alpha = 0.30f), RoundedCornerShape(8.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = null,
-                            tint = themeColors.onPrimary,
-                            modifier = Modifier.size(22.dp)
+                            tint = themeColors.primary,
+                            modifier = Modifier.size(19.dp)
                         )
                     }
                     Column {
                         Text(
-                            text = "NEURAL STUDIO 26",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = themeColors.onPrimary.copy(alpha = 0.88f),
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 1.sp
+                            text = "Workspace · $assistantName",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = themeColors.textSecondary,
+                            fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Ask $assistantName Anything",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = themeColors.onPrimary,
-                            fontWeight = FontWeight.Black
+                            text = "Ask $assistantName",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = themeColors.textPrimary,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
                 Text(
-                    text = "Chat in Hinglish, Hindi, or English. Automatically saves memories and executes phone commands.",
+                    text = "Supports Hinglish, Hindi, and English with local memory recall and device actions.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = themeColors.onPrimary.copy(alpha = 0.90f),
-                    fontWeight = FontWeight.SemiBold
+                    color = themeColors.textSecondary,
+                    fontWeight = FontWeight.Normal
                 )
             }
         }
@@ -946,16 +878,9 @@ private fun EmptyChatExperience(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(
-                            Brush.horizontalGradient(
-                                listOf(
-                                    themeColors.cardSurface,
-                                    themeColors.surfaceElevated.copy(alpha = 0.88f)
-                                )
-                            )
-                        )
-                        .border(1.2.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(22.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(themeColors.cardSurface)
+                        .border(1.dp, themeColors.border, RoundedCornerShape(12.dp))
                         .clickable { onQuickPrompt(prompt) }
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1178,51 +1103,23 @@ fun JarvisMessageBubble(
     val isUser = message.role == "user"
     var fallbackPayloadModal by remember { mutableStateOf<String?>(null) }
     val bubbleShape = if (isUser) {
-        RoundedCornerShape(topStart = 24.dp, topEnd = 8.dp, bottomStart = 24.dp, bottomEnd = 24.dp)
+        RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
     } else {
-        RoundedCornerShape(topStart = 8.dp, topEnd = 24.dp, bottomStart = 24.dp, bottomEnd = 24.dp)
+        RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
     }
 
     val themeColors = JarvisTheme.colors
 
-    val backgroundBrush = when {
-        message.isError -> Brush.linearGradient(
-            listOf(
-                themeColors.statusRoseRed.copy(alpha = 0.22f),
-                themeColors.surfaceElevated
-            )
-        )
-        isUser -> Brush.linearGradient(
-            listOf(
-                themeColors.accent,
-                themeColors.primary
-            )
-        )
-        else -> Brush.linearGradient(
-            listOf(
-                themeColors.chatBubbleAssistant,
-                themeColors.surfaceElevated.copy(alpha = 0.96f)
-            )
-        )
+    val bubbleContainerColor = when {
+        message.isError -> themeColors.statusRoseRed.copy(alpha = 0.14f)
+        isUser -> themeColors.primary
+        else -> themeColors.chatBubbleAssistant
     }
 
-    val borderBrush = when {
-        message.isError -> Brush.horizontalGradient(
-            listOf(themeColors.statusRoseRed, themeColors.statusRoseRed.copy(alpha = 0.45f))
-        )
-        isUser -> Brush.horizontalGradient(
-            listOf(
-                themeColors.onPrimary.copy(alpha = 0.50f),
-                themeColors.glassRimTop
-            )
-        )
-        else -> Brush.horizontalGradient(
-            listOf(
-                themeColors.glassRimTop,
-                themeColors.borderHighlight,
-                themeColors.glassRimBottom
-            )
-        )
+    val bubbleBorderColor = when {
+        message.isError -> themeColors.statusRoseRed.copy(alpha = 0.45f)
+        isUser -> themeColors.primary
+        else -> themeColors.border
     }
 
     val contentTextColor = if (isUser) themeColors.onPrimary else themeColors.textPrimary
@@ -1309,8 +1206,8 @@ fun JarvisMessageBubble(
                 .padding(start = 52.dp)
                 .widthIn(max = 320.dp)
                 .clip(bubbleShape)
-                .background(backgroundBrush)
-                .border(1.dp, borderBrush, bubbleShape)
+                .background(bubbleContainerColor)
+                .border(1.dp, bubbleBorderColor, bubbleShape)
                 .padding(14.dp)
         } else if (message.isError) {
             Modifier

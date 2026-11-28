@@ -5,19 +5,19 @@ import androidx.compose.ui.graphics.Color
 import java.util.UUID
 
 object JarvisBrowserColors {
-    val BgDark = Color(0xFF121214)
-    val Surface = Color(0xFF1C1C20)
-    val SurfaceElevated = Color(0xFF25252B)
-    val CardBorder = Color(0xFF2F2F37)
-    val Coral = Color(0xFFF25F70)
-    val CoralSoft = Color(0x26F25F70)
-    val TextPrimary = Color(0xFFF4F4F6)
-    val TextSecondary = Color(0xFF9C9CA8)
-    val GreenSecure = Color(0xFF34D399)
-    val PrivateAccent = Color(0xFFA855F7)
-    val PrivateSurface = Color(0xFF1A1525)
-    val Gold = Color(0xFFFBBF24)
-    val SkyBlue = Color(0xFF38BDF8)
+    val BgDark = Color(0xFF0D0E12)
+    val Surface = Color(0xFF15171C)
+    val SurfaceElevated = Color(0xFF1D2027)
+    val CardBorder = Color(0xFF2A2E38)
+    val Coral = Color(0xFF5B8DEF)
+    val CoralSoft = Color(0x225B8DEF)
+    val TextPrimary = Color(0xFFECEEF2)
+    val TextSecondary = Color(0xFF98A0AE)
+    val GreenSecure = Color(0xFF22C55E)
+    val PrivateAccent = Color(0xFF8B74EB)
+    val PrivateSurface = Color(0xFF181620)
+    val Gold = Color(0xFFEAB308)
+    val SkyBlue = Color(0xFF5B8DEF)
 }
 
 data class JarvisTab(

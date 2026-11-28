@@ -1162,7 +1162,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             }
 
             Scaffold(
-                containerColor = Color(0xFF0A0D12),
+                containerColor = com.example.ui.theme.JarvisTheme.colors.background,
                 topBar = {
                     if (activeScreen == "home") {
                         JarvisUnifiedTopBar(
@@ -1969,19 +1969,20 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 modifier = Modifier.fillMaxSize()
                                             )
                                         } else {
+                                            val themeColors = com.example.ui.theme.JarvisTheme.colors
                                             Text(
-                                                text = "How can I help you today?",
-                                                color = Color.White,
+                                                text = "Ready for your next task",
+                                                color = themeColors.textPrimary,
                                                 fontFamily = FontFamily.SansSerif,
-                                                fontSize = 25.sp,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                letterSpacing = (-0.4).sp,
+                                                fontSize = 22.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                letterSpacing = (-0.2).sp,
                                                 textAlign = TextAlign.Center
                                             )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
-                                                text = "Ask a question, brainstorm ideas, or start coding",
-                                                color = Color(0xFF8B949E),
+                                                text = "Type a command, attach files with +, or open Voice Studio",
+                                                color = themeColors.textSecondary,
                                                 fontSize = 14.sp,
                                                 textAlign = TextAlign.Center
                                             )
@@ -3453,52 +3454,54 @@ private fun AiStudioInlineSetupCard(
     onOpenFullSettings: () -> Unit
 ) {
     val context = LocalContext.current
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     var apiKeyInput by rememberSaveable { mutableStateOf("") }
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color(0xFF111827),
-        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(12.dp),
+        color = themeColors.cardSurface,
+        border = BorderStroke(1.dp, themeColors.cardBorder),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "🔑 Google AI Studio Engine Setup",
-                color = Color(0xFF00E5FF),
+                text = "Google AI Studio Setup",
+                color = themeColors.textPrimary,
                 fontSize = 15.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Run Gemini 2.0 Flash & Gemini 1.5 Pro 100% FREE (1,500 requests/day per key). Paste 1–3+ keys (comma or newline separated) for automatic 429 burst rotation.",
-                color = Color(0xFFE2E8F0),
-                fontSize = 12.5.sp
+                text = "Add a Gemini API key (comma or newline separated for multi-key rotation).",
+                color = themeColors.textSecondary,
+                fontSize = 13.sp
             )
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
                 value = apiKeyInput,
                 onValueChange = { apiKeyInput = it },
                 placeholder = {
                     Text(
                         text = "AIzaSy... (or multiple keys separated by comma)",
-                        color = Color(0xFF64748B),
+                        color = themeColors.textMuted,
                         fontSize = 12.sp
                     )
                 },
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFF00E5FF),
-                    unfocusedBorderColor = Color(0xFF334155),
-                    focusedContainerColor = Color(0xFF0A0E17),
-                    unfocusedContainerColor = Color(0xFF0A0E17)
+                    focusedTextColor = themeColors.textPrimary,
+                    unfocusedTextColor = themeColors.textPrimary,
+                    focusedBorderColor = themeColors.accent,
+                    unfocusedBorderColor = themeColors.border,
+                    focusedContainerColor = themeColors.inputBackground,
+                    unfocusedContainerColor = themeColors.surfaceElevated
                 ),
+                shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.fillMaxWidth(),
                 maxLines = 3
             )
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -3513,10 +3516,11 @@ private fun AiStudioInlineSetupCard(
                             context.startActivity(intent)
                         }
                     },
-                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, themeColors.border),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("🚀 Get Free Key", color = Color(0xFF00E5FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Get API Key", color = themeColors.accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
 
                 Button(
@@ -3528,10 +3532,11 @@ private fun AiStudioInlineSetupCard(
                             onOpenFullSettings()
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = themeColors.accent),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("💾 Save & Connect", color = Color(0xFF0A0E17), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Save & Connect", color = themeColors.onPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
             }
         }
@@ -3558,7 +3563,7 @@ private fun resolveTopBarModelDisplay(
     return when {
         provider == com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL || clean.startsWith("cactus:", ignoreCase = true) -> {
             val spec = com.jarvisai.assistant.cactus.CactusModelCatalog.findById(clean)
-            "🌵 Cactus • ${spec?.displayName ?: clean.removePrefix("cactus:")}"
+            "Cactus • ${spec?.displayName ?: clean.removePrefix("cactus:")}"
         }
         provider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY || clean.startsWith("agy:", ignoreCase = true) -> {
             val matched = antigravityModels.firstOrNull {
@@ -3566,37 +3571,37 @@ private fun resolveTopBarModelDisplay(
                     it.thinkingVariantIds.values.any { v -> v.equals(rawAgyId, ignoreCase = true) }
             }
             if (matched != null && matched.displayName.isNotBlank()) {
-                "☁️ Antigravity • ${matched.displayName}"
+                "Antigravity • ${matched.displayName}"
             } else {
                 when {
-                    bare.contains("orchestrator-carbon") -> "☁️ Antigravity • Orchestrator (Carbon)"
-                    bare.contains("orchestrator-argon") -> "☁️ Antigravity • Orchestrator (Argon)"
-                    bare.contains("carbon") -> "☁️ Antigravity • Gemini 4 Carbon"
-                    bare.contains("argon") -> "☁️ Antigravity • Gemini 4 Argon"
-                    bare.contains("hydrogen") -> "☁️ Antigravity • Gemini 4 Hydrogen"
-                    bare.contains("3.8") -> "☁️ Antigravity • Gemini 3.8 Flash"
-                    bare.contains("3.7") -> "☁️ Antigravity • Gemini 3.7 Flash"
-                    bare.contains("3.6") -> "☁️ Antigravity • Gemini 3.6 Flash"
-                    bare.contains("3.1-pro") || bare.contains("3.1 pro") -> "☁️ Antigravity • Gemini 3.1 Pro"
-                    bare.contains("opus-5.5") || bare.contains("opus 5.5") -> "☁️ Antigravity • Claude Opus 5.5"
-                    bare.contains("sonnet-5.5") || bare.contains("sonnet 5.5") -> "☁️ Antigravity • Claude Sonnet 5.5"
-                    bare.contains("sonnet-4.6") || bare.contains("sonnet 4.6") -> "☁️ Antigravity • Claude Sonnet 4.6"
-                    bare.contains("claude") || bare.contains("sonnet") || bare.contains("opus") -> "☁️ Antigravity • Claude Thinking"
-                    bare.contains("gpt") -> "☁️ Antigravity • GPT-OSS 120B"
-                    else -> "☁️ Antigravity • $rawAgyId"
+                    bare.contains("orchestrator-carbon") -> "Antigravity • Orchestrator (Carbon)"
+                    bare.contains("orchestrator-argon") -> "Antigravity • Orchestrator (Argon)"
+                    bare.contains("carbon") -> "Antigravity • Gemini 4 Carbon"
+                    bare.contains("argon") -> "Antigravity • Gemini 4 Argon"
+                    bare.contains("hydrogen") -> "Antigravity • Gemini 4 Hydrogen"
+                    bare.contains("3.8") -> "Antigravity • Gemini 3.8 Flash"
+                    bare.contains("3.7") -> "Antigravity • Gemini 3.7 Flash"
+                    bare.contains("3.6") -> "Antigravity • Gemini 3.6 Flash"
+                    bare.contains("3.1-pro") || bare.contains("3.1 pro") -> "Antigravity • Gemini 3.1 Pro"
+                    bare.contains("opus-5.5") || bare.contains("opus 5.5") -> "Antigravity • Claude Opus 5.5"
+                    bare.contains("sonnet-5.5") || bare.contains("sonnet 5.5") -> "Antigravity • Claude Sonnet 5.5"
+                    bare.contains("sonnet-4.6") || bare.contains("sonnet 4.6") -> "Antigravity • Claude Sonnet 4.6"
+                    bare.contains("claude") || bare.contains("sonnet") || bare.contains("opus") -> "Antigravity • Claude Thinking"
+                    bare.contains("gpt") -> "Antigravity • GPT-OSS 120B"
+                    else -> "Antigravity • $rawAgyId"
                 }
             }
         }
-        bare == "gemini-4-hydrogen" -> "⚡ Google AI Studio • Gemini 4 Hydrogen"
-        bare == "gemini-4-argon" -> "⚡ Google AI Studio • Gemini 4 Argon"
-        bare == "gemini-4-carbon" -> "⚡ Google AI Studio • Gemini 4 Carbon"
-        bare == "gemini-3.8-flash" -> "⚡ Google AI Studio • Gemini 3.8 Flash"
-        bare == "gemini-3.5-flash-lite" -> "⚡ Google AI Studio • Gemini 3.5 Lite"
-        bare == "gemini-3.1-flash-lite" -> "⚡ Google AI Studio • Gemini 3.1 Lite"
-        bare == "gemini-2.5-pro" -> "⚡ Google AI Studio • Gemini 2.5 Pro"
-        bare.contains("live") -> "⚡ Google AI Studio • Live Voice"
-        bare.isNotBlank() -> "⚡ Google AI Studio • $clean"
-        else -> "⚡ Google AI Studio • Gemini 3.8 Flash"
+        bare == "gemini-4-hydrogen" -> "Google AI Studio • Gemini 4 Hydrogen"
+        bare == "gemini-4-argon" -> "Google AI Studio • Gemini 4 Argon"
+        bare == "gemini-4-carbon" -> "Google AI Studio • Gemini 4 Carbon"
+        bare == "gemini-3.8-flash" -> "Google AI Studio • Gemini 3.8 Flash"
+        bare == "gemini-3.5-flash-lite" -> "Google AI Studio • Gemini 3.5 Lite"
+        bare == "gemini-3.1-flash-lite" -> "Google AI Studio • Gemini 3.1 Lite"
+        bare == "gemini-2.5-pro" -> "Google AI Studio • Gemini 2.5 Pro"
+        bare.contains("live") -> "Google AI Studio • Live Voice"
+        bare.isNotBlank() -> "Google AI Studio • $clean"
+        else -> "Google AI Studio • Gemini 3.8 Flash"
     }
 }
 

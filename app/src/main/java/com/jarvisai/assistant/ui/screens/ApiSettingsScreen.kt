@@ -65,6 +65,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.AlertCrimson
+import com.example.ui.theme.JarvisTheme
 import com.example.ui.theme.JarvisElectricBlue
 import com.example.ui.theme.JarvisElevatedSurface
 import com.example.ui.theme.JarvisGlassBorder
@@ -127,7 +128,7 @@ fun ApiSettingsScreen(
         topBar = {
             JarvisPremiumTopBar(
                 title = "API & Model Vault",
-                subtitle = if (hasStoredKey) "KEYSTORE VAULT ARMED • $maskedApiKey" else "API CREDENTIAL REQUIRED",
+                subtitle = if (hasStoredKey) "Keystore active • $maskedApiKey" else "API key required",
                 status = status,
                 onBackClick = onBack
             )
@@ -140,94 +141,58 @@ fun ApiSettingsScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 128.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            // 1. IMAGE 9 ("SHRUHH WELCOME BACK") FROSTED VIOLET RIBBED GLASS CREDENTIAL CARD
+            // 1. Keystore Vault Credential Card
             item {
+                val vaultColors = JarvisTheme.colors
+                val hasKeyDraft = apiKeyInput.trim().isNotEmpty()
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .drawBehind {
-                            // Flowing 3D violet ribbon aura behind card (Image 9 reference!)
-                            drawCircle(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        Color(0xFF9333EA).copy(alpha = 0.36f),
-                                        Color(0xFF4F46E5).copy(alpha = 0.14f),
-                                        Color.Transparent
-                                    ),
-                                    center = Offset(size.width * 0.8f, size.height * 0.25f),
-                                    radius = size.width * 0.75f
-                                ),
-                                radius = size.width * 0.75f
-                            )
-                        }
-                        .clip(RoundedCornerShape(30.dp))
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    Color(0xFF281646).copy(alpha = 0.92f),
-                                    Color(0xFF17102B).copy(alpha = 0.95f),
-                                    Color(0xFF23133E).copy(alpha = 0.92f)
-                                ),
-                                start = Offset(0f, 0f),
-                                end = Offset(800f, 800f)
-                            )
-                        )
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(vaultColors.cardSurface)
                         .border(
-                            width = 1.5.dp,
-                            brush = Brush.linearGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = 0.65f),
-                                    Color(0xFFC084FC).copy(alpha = 0.55f),
-                                    Color.White.copy(alpha = 0.45f)
-                                )
-                            ),
-                            shape = RoundedCornerShape(30.dp)
+                            width = 1.dp,
+                            color = vaultColors.border,
+                            shape = RoundedCornerShape(12.dp)
                         )
-                        .padding(24.dp)
+                        .padding(20.dp)
                 ) {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        // Centered 3D Dual-Pill Emblem + Brand Label (Image 9 "SHRUHH" logo header)
                         Box(
                             modifier = Modifier
-                                .size(54.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    Brush.linearGradient(
-                                        colors = listOf(Color(0xFFA855F7), Color(0xFF6366F1))
-                                    )
-                                )
-                                .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(16.dp)),
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(vaultColors.primary.copy(alpha = 0.14f))
+                                .border(1.dp, vaultColors.primary.copy(alpha = 0.30f), RoundedCornerShape(10.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
                                 contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(26.dp)
+                                tint = vaultColors.primary,
+                                modifier = Modifier.size(22.dp)
                             )
                         }
 
                         Text(
-                            text = "KEYSTORE VAULT",
+                            text = "Keystore Vault",
                             style = MaterialTheme.typography.labelMedium,
-                            color = Color(0xFFE9D5FF),
-                            letterSpacing = 2.sp,
-                            fontWeight = FontWeight.Bold
+                            color = vaultColors.textSecondary,
+                            fontWeight = FontWeight.Medium
                         )
 
                         Text(
-                            text = if (hasStoredKey) "Credential Verified, Commander" else "Welcome Back, Commander",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
+                            text = if (hasStoredKey) "API Key Configured" else "Add Gemini API Key",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = vaultColors.textPrimary,
+                            fontWeight = FontWeight.SemiBold,
                             textAlign = TextAlign.Center
                         )
 
-                        // Minimalist Dark Glass Input with White-Violet Specular Rim (Image 9 input style!)
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -235,7 +200,7 @@ fun ApiSettingsScreen(
                             Text(
                                 text = "Gemini API Key (${if (isKeystoreBacked) "AES-256 Hardware Encrypted" else "Local Vault"})",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = Color(0xFFE9D5FF)
+                                color = vaultColors.textSecondary
                             )
 
                             OutlinedTextField(
@@ -244,7 +209,7 @@ fun ApiSettingsScreen(
                                 placeholder = {
                                     Text(
                                         text = "AIzaSy...",
-                                        color = JarvisTextMuted
+                                        color = vaultColors.textMuted
                                     )
                                 },
                                 singleLine = true,
@@ -261,50 +226,37 @@ fun ApiSettingsScreen(
                                         Icon(
                                             imageVector = if (isKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                                             contentDescription = if (isKeyVisible) "Hide API Key" else "Show API Key",
-                                            tint = Color(0xFFD8B4FE)
+                                            tint = vaultColors.textSecondary
                                         )
                                     }
                                 },
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedContainerColor = Color(0xFF0E081C).copy(alpha = 0.85f),
-                                    unfocusedContainerColor = Color(0xFF0B0617).copy(alpha = 0.85f),
-                                    focusedBorderColor = Color.White,
-                                    unfocusedBorderColor = Color.White.copy(alpha = 0.55f),
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White
+                                    focusedContainerColor = vaultColors.inputBackground,
+                                    unfocusedContainerColor = vaultColors.surface,
+                                    focusedBorderColor = vaultColors.primary,
+                                    unfocusedBorderColor = vaultColors.border,
+                                    focusedTextColor = vaultColors.textPrimary,
+                                    unfocusedTextColor = vaultColors.textPrimary
                                 ),
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("api_key_input_field")
                             )
                         }
 
-                        // Image 9 Pastel-Violet Luminous Gradient Button with Crisp White Border ("Login" button style!)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(52.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(
-                                    Brush.horizontalGradient(
-                                        colors = if (apiKeyInput.trim().isNotEmpty()) {
-                                            listOf(
-                                                Color(0xFFC084FC),
-                                                Color(0xFF9333EA),
-                                                Color(0xFFA855F7)
-                                            )
-                                        } else {
-                                            listOf(JarvisGlassSurface, JarvisGlassSurface)
-                                        }
-                                    )
-                                )
+                                .height(48.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (hasKeyDraft) vaultColors.primary else vaultColors.surfacePill)
                                 .border(
-                                    width = 1.2.dp,
-                                    color = Color.White.copy(alpha = if (apiKeyInput.trim().isNotEmpty()) 0.85f else 0.2f),
-                                    shape = RoundedCornerShape(14.dp)
+                                    width = 1.dp,
+                                    color = if (hasKeyDraft) vaultColors.primary else vaultColors.border,
+                                    shape = RoundedCornerShape(10.dp)
                                 )
-                                .clickable(enabled = apiKeyInput.trim().isNotEmpty()) {
+                                .clickable(enabled = hasKeyDraft) {
                                     onSaveOrUpdateKey(apiKeyInput)
                                 }
                                 .testTag("btn_save_api_key"),
@@ -313,8 +265,8 @@ fun ApiSettingsScreen(
                             Text(
                                 text = if (hasStoredKey) "Update API Key" else "Save API Key",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
+                                color = if (hasKeyDraft) vaultColors.onPrimary else vaultColors.textMuted,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
 
@@ -327,7 +279,7 @@ fun ApiSettingsScreen(
                                 text = if (isTestingConnection) "Testing..." else "Test API",
                                 icon = Icons.Default.NetworkCheck,
                                 enabled = !isTestingConnection && (apiKeyInput.isNotBlank() || hasStoredKey),
-                                accentColor = JarvisNeonCyan,
+                                accentColor = vaultColors.primary,
                                 onClick = { onTestConnection(apiKeyInput) },
                                 modifier = Modifier
                                     .weight(1f)
@@ -338,7 +290,7 @@ fun ApiSettingsScreen(
                                 text = "Sync Models",
                                 icon = Icons.Default.CloudSync,
                                 enabled = !isTestingConnection && (apiKeyInput.isNotBlank() || hasStoredKey),
-                                accentColor = Color(0xFFD8B4FE),
+                                accentColor = vaultColors.textSecondary,
                                 onClick = { onSyncModelsFromApi(apiKeyInput) },
                                 modifier = Modifier
                                     .weight(1f)
@@ -380,25 +332,19 @@ fun ApiSettingsScreen(
                 }
             }
 
-            // 2. IMAGE 6 ("SYSTEM UPDATE") ROYAL SAPPHIRE DIAGNOSTIC RESULT CARD
+            // 2. Diagnostic Result Card
             if (connectionTestResult != null) {
                 item {
+                    val diagColors = JarvisTheme.colors
                     val isOk = connectionTestResult.success
-                    val accent = if (isOk) JarvisNeonCyan else AlertCrimson
+                    val accent = if (isOk) diagColors.primary else diagColors.statusRoseRed
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color(0xFF0A193B),
-                                        Color(0xFF050E24)
-                                    )
-                                )
-                            )
-                            .border(1.5.dp, accent.copy(alpha = 0.8f), RoundedCornerShape(28.dp))
-                            .padding(20.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(diagColors.cardSurface)
+                            .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                            .padding(16.dp)
                             .testTag("connection_test_result_box")
                     ) {
                         Column(
@@ -409,42 +355,37 @@ fun ApiSettingsScreen(
                             Text(
                                 text = "Model: ${connectionTestResult.modelTested}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = JarvisTextSecondary,
+                                color = diagColors.textSecondary,
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
                                 text = if (isOk) "Handshake Verified" else "Connection Error",
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
+                                style = MaterialTheme.typography.titleLarge,
+                                color = diagColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
                             )
                             Text(
                                 text = connectionTestResult.message,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = JarvisTextSecondary,
+                                color = diagColors.textSecondary,
                                 textAlign = TextAlign.Center
                             )
 
-                            // Image 6 Thick Pill Gradient Progress Bar
+                            // Linear progress indicator
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(14.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(Color(0xFF040917))
-                                    .border(1.dp, Color(0xFF253B6E), RoundedCornerShape(999.dp))
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(diagColors.surfacePill)
+                                    .border(1.dp, diagColors.border, RoundedCornerShape(4.dp))
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxHeight()
                                         .fillMaxWidth(if (isOk) 1f else 0.25f)
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(
-                                            Brush.horizontalGradient(
-                                                if (isOk) listOf(JarvisNeonCyan, Color(0xFF3B82F6), Color(0xFF6366F1))
-                                                else listOf(AlertCrimson, StatusThinkingAmber)
-                                            )
-                                        )
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(if (isOk) diagColors.primary else diagColors.statusRoseRed)
                                 )
                             }
 
@@ -713,23 +654,24 @@ fun ApiSettingsScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            val ollamaColors = JarvisTheme.colors
                             Icon(
                                 imageVector = Icons.Default.CloudSync,
                                 contentDescription = null,
-                                tint = Color(0xFF10B981),
-                                modifier = Modifier.size(24.dp)
+                                tint = ollamaColors.statusEmerald,
+                                modifier = Modifier.size(22.dp)
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Native Local Ollama & Multi-Provider Bridge",
+                                    text = "Local Ollama & Multi-Provider Bridge",
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.ExtraBold
+                                    color = ollamaColors.textPrimary,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = if (ollamaConfig.isOnline) "🟢 Ollama Daemon Online (${ollamaConfig.endpointUrl})" else "⚪ Local LLM Standby / Offline",
+                                    text = if (ollamaConfig.isOnline) "Ollama daemon online (${ollamaConfig.endpointUrl})" else "Local LLM standby / offline",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (ollamaConfig.isOnline) Color(0xFF10B981) else JarvisTextSecondary
+                                    color = if (ollamaConfig.isOnline) ollamaColors.statusEmerald else ollamaColors.textSecondary
                                 )
                             }
                         }

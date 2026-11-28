@@ -65,6 +65,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.text.style.TextOverflow
+import com.example.ui.theme.JarvisTheme
 import com.jarvisai.assistant.data.preferences.TerminalLauncherManager
 import com.jarvisai.assistant.terminal.EnvironmentDiagnostics
 import com.jarvisai.assistant.terminal.LinuxRuntimeMode
@@ -196,13 +197,14 @@ fun LinuxRootfsManagerDialog(
         onDismissRequest = onDismiss, // ALWAYS ALLOW DISMISSING / MINIMIZING TO BACKGROUND
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        val dialogColors = JarvisTheme.colors
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.88f)
-                .clip(RoundedCornerShape(20.dp))
-                .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.4f), RoundedCornerShape(20.dp)),
-            color = Color(0xFF0A0E17)
+                .clip(RoundedCornerShape(16.dp))
+                .border(1.dp, dialogColors.border, RoundedCornerShape(16.dp)),
+            color = dialogColors.surfaceElevated
         ) {
             Column(
                 modifier = Modifier
@@ -219,20 +221,20 @@ fun LinuxRootfsManagerDialog(
                         Icon(
                             imageVector = Icons.Default.Terminal,
                             contentDescription = null,
-                            tint = Color(0xFF00E5FF),
-                            modifier = Modifier.size(26.dp)
+                            tint = dialogColors.primary,
+                            modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
                                 text = "Termux Linux Core Engine",
-                                color = Color.White,
+                                color = dialogColors.textPrimary,
                                 fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.SemiBold
                             )
                             Text(
                                 text = "Node.js • Python • Git • Neovim • Bash",
-                                color = Color(0xFF94A3B8),
+                                color = dialogColors.textSecondary,
                                 fontSize = 11.sp
                             )
                         }
@@ -243,7 +245,7 @@ fun LinuxRootfsManagerDialog(
                         onClick = onDismiss,
                         enabled = true
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.LightGray)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = dialogColors.textSecondary)
                     }
                 }
 
@@ -259,11 +261,11 @@ fun LinuxRootfsManagerDialog(
                 val diag = diagnostics
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF111827),
+                    shape = RoundedCornerShape(10.dp),
+                    color = dialogColors.cardSurface,
                     border = BorderStroke(
                         1.dp,
-                        if (diag?.isInstalled == true) Color(0xFF10B981).copy(alpha = 0.4f) else Color(0xFFF59E0B).copy(alpha = 0.4f)
+                        if (diag?.isInstalled == true) dialogColors.statusEmerald.copy(alpha = 0.4f) else dialogColors.statusAmber.copy(alpha = 0.4f)
                     )
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
@@ -323,23 +325,23 @@ fun LinuxRootfsManagerDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "⚡ Linux Runtime Engine (Option B Native)",
-                                color = Color(0xFF38BDF8),
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Bold
+                                text = "Linux Runtime Engine (Native)",
+                                color = Color(0xFFECEEF2),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
                             )
                             Text(
                                 text = when {
-                                    activeMode == LinuxRuntimeMode.DIRECT_NATIVE && diag?.hasRelocateHooks == true -> "NATIVE RELOCATED"
-                                    activeMode == LinuxRuntimeMode.DIRECT_NATIVE -> "NATIVE DIRECT"
-                                    diag?.isProotVirtualActive == true -> "PROOT ACTIVE"
-                                    diag?.hasPRoot == true -> "PROOT READY"
-                                    else -> "STANDBY"
+                                    activeMode == LinuxRuntimeMode.DIRECT_NATIVE && diag?.hasRelocateHooks == true -> "Relocated"
+                                    activeMode == LinuxRuntimeMode.DIRECT_NATIVE -> "Direct"
+                                    diag?.isProotVirtualActive == true -> "PRoot active"
+                                    diag?.hasPRoot == true -> "PRoot ready"
+                                    else -> "Standby"
                                 },
-                                color = if (activeMode == LinuxRuntimeMode.DIRECT_NATIVE || diag?.isProotVirtualActive == true) Color(0xFF10B981) else Color(0xFFF59E0B),
-                                fontSize = 10.sp,
+                                color = if (activeMode == LinuxRuntimeMode.DIRECT_NATIVE || diag?.isProotVirtualActive == true) Color(0xFF22C55E) else Color(0xFFEAB308),
+                                fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Medium
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
@@ -374,12 +376,12 @@ fun LinuxRootfsManagerDialog(
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
                                     colors = ButtonDefaults.outlinedButtonColors(
-                                        containerColor = if (selected) Color(0xFF00E5FF).copy(alpha = 0.16f) else Color.Transparent,
-                                        contentColor = if (selected) Color(0xFF00E5FF) else Color(0xFF94A3B8)
+                                        containerColor = if (selected) dialogColors.primary.copy(alpha = 0.14f) else Color.Transparent,
+                                        contentColor = if (selected) dialogColors.primary else dialogColors.textSecondary
                                     ),
                                     border = BorderStroke(
                                         1.dp,
-                                        if (selected) Color(0xFF00E5FF) else Color(0xFF334155)
+                                        if (selected) dialogColors.primary else dialogColors.border
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -407,7 +409,7 @@ fun LinuxRootfsManagerDialog(
                                 },
                                 enabled = !isBusy,
                                 shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
+                                border = BorderStroke(1.dp, dialogColors.statusEmerald.copy(alpha = 0.55f)),
                                 modifier = Modifier
                                     .weight(1f)
                                     .minimumInteractiveComponentSize()
@@ -415,9 +417,9 @@ fun LinuxRootfsManagerDialog(
                             ) {
                                 Text(
                                     text = if (diag?.hasPRoot == true) "Repair PRoot" else "Install PRoot (~3MB)",
-                                    color = Color(0xFF10B981),
+                                    color = dialogColors.statusEmerald,
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                             OutlinedButton(
@@ -433,17 +435,17 @@ fun LinuxRootfsManagerDialog(
                                 },
                                 enabled = !isBusy,
                                 shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, Color(0xFFA78BFA).copy(alpha = 0.6f)),
+                                border = BorderStroke(1.dp, dialogColors.primary.copy(alpha = 0.55f)),
                                 modifier = Modifier
                                     .weight(1f)
                                     .minimumInteractiveComponentSize()
                                     .testTag("install_ubuntu_button")
                             ) {
                                 Text(
-                                    text = if (diag?.hasUbuntuRootfs == true) "Ubuntu [✓]" else "Ubuntu 24.04",
-                                    color = Color(0xFFA78BFA),
+                                    text = if (diag?.hasUbuntuRootfs == true) "Ubuntu (Ready)" else "Ubuntu 24.04",
+                                    color = dialogColors.primary,
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
@@ -452,7 +454,7 @@ fun LinuxRootfsManagerDialog(
                             onClick = { showLauncherOnboarding = true },
                             enabled = !isBusy,
                             shape = RoundedCornerShape(8.dp),
-                            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.55f)),
+                            border = BorderStroke(1.dp, dialogColors.borderHighlight),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .minimumInteractiveComponentSize()
@@ -461,7 +463,7 @@ fun LinuxRootfsManagerDialog(
                             Icon(
                                 imageVector = Icons.Default.Terminal,
                                 contentDescription = "Configure Dual Terminal App Icon",
-                                tint = Color(0xFF00E5FF),
+                                tint = dialogColors.primary,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -473,9 +475,9 @@ fun LinuxRootfsManagerDialog(
                             }
                             Text(
                                 text = iconBadge,
-                                color = Color(0xFF00E5FF),
+                                color = dialogColors.primary,
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
@@ -488,31 +490,31 @@ fun LinuxRootfsManagerDialog(
                 if (localZip != null) {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF0F172A),
-                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f))
+                        shape = RoundedCornerShape(10.dp),
+                        color = dialogColors.cardSurface,
+                        border = BorderStroke(1.dp, dialogColors.borderHighlight)
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.DownloadDone, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.DownloadDone, contentDescription = null, tint = dialogColors.primary, modifier = Modifier.size(19.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "Detected Offline Archive",
-                                    color = Color(0xFF00E5FF),
-                                    fontWeight = FontWeight.Bold,
+                                    color = dialogColors.primary,
+                                    fontWeight = FontWeight.SemiBold,
                                     fontSize = 13.sp
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "${localZip.name} (${LocalEnvironmentManager.formatFileSize(localZip.length())})",
-                                color = Color.White,
+                                color = dialogColors.textPrimary,
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
+                                fontWeight = FontWeight.Medium
                             )
                             Text(
                                 text = "Path: ${localZip.absolutePath}",
-                                color = Color(0xFF94A3B8),
+                                color = dialogColors.textSecondary,
                                 fontSize = 10.sp
                             )
                             Spacer(modifier = Modifier.height(10.dp))
@@ -521,20 +523,19 @@ fun LinuxRootfsManagerDialog(
                                     LocalEnvironmentManager.startInstall(context, localZip)
                                 },
                                 enabled = !isBusy,
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                                colors = ButtonDefaults.buttonColors(containerColor = dialogColors.primary),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(Icons.Default.Bolt, contentDescription = null, tint = Color(0xFF0A0E17))
+                                Icon(Icons.Default.Bolt, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (diag?.isInstalled == true) "Re-install from Offline Archive" else "⚡ 1-Click Install Offline Rootfs",
-                                    color = Color(0xFF0A0E17),
-                                    fontWeight = FontWeight.Bold
+                                    text = if (diag?.isInstalled == true) "Re-install from Archive" else "Install Offline Rootfs",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
 
-                            // Instant 0.5s Permission Repair for existing files
                             if (LocalEnvironmentManager.hasExtractedFiles(context) && diag?.isInstalled != true) {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 OutlinedButton(
@@ -545,17 +546,17 @@ fun LinuxRootfsManagerDialog(
                                         }
                                     },
                                     enabled = !isBusy,
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF10B981)),
-                                    border = BorderStroke(1.dp, Color(0xFF10B981)),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF22C55E)),
+                                    border = BorderStroke(1.dp, Color(0xFF22C55E).copy(alpha = 0.50f)),
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Icon(Icons.Default.Build, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Build, contentDescription = null, tint = Color(0xFF22C55E), modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "⚡ Repair Permissions & Activate (Instant)",
-                                        color = Color(0xFF10B981),
-                                        fontWeight = FontWeight.Bold,
+                                        text = "Repair Permissions & Activate",
+                                        color = Color(0xFF22C55E),
+                                        fontWeight = FontWeight.Medium,
                                         fontSize = 12.sp
                                     )
                                 }
@@ -590,8 +591,8 @@ fun LinuxRootfsManagerDialog(
                         )
                         if (hardwareInfo.hardwareWarning != null) {
                             Text(
-                                text = "⚠ ${hardwareInfo.hardwareWarning}",
-                                color = Color(0xFFF59E0B),
+                                text = "Warning: ${hardwareInfo.hardwareWarning}",
+                                color = dialogColors.statusAmber,
                                 fontSize = 10.5.sp
                             )
                         }
@@ -618,8 +619,8 @@ fun LinuxRootfsManagerDialog(
                                         }
                                         .testTag("rootfs_dialog_mirror_${mirror.id}"),
                                     shape = RoundedCornerShape(8.dp),
-                                    color = if (isSel) Color(0xFF00E5FF).copy(alpha = 0.18f) else Color(0xFF1E293B),
-                                    border = BorderStroke(1.dp, if (isSel) Color(0xFF00E5FF) else Color(0xFF334155))
+                                    color = if (isSel) dialogColors.primary.copy(alpha = 0.14f) else dialogColors.surfacePill,
+                                    border = BorderStroke(1.dp, if (isSel) dialogColors.primary else dialogColors.border)
                                 ) {
                                     Box(
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -627,9 +628,9 @@ fun LinuxRootfsManagerDialog(
                                     ) {
                                         Text(
                                             text = label,
-                                            color = if (isSel) Color(0xFF00E5FF) else Color(0xFFCBD5E1),
+                                            color = if (isSel) dialogColors.primary else dialogColors.textSecondary,
                                             fontSize = 11.sp,
-                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium
+                                            fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Medium
                                         )
                                     }
                                 }

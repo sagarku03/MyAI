@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import com.example.ui.theme.JarvisTheme
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -197,14 +198,15 @@ fun LocalToolsInstallDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        val dialogColors = JarvisTheme.colors
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .heightIn(max = 700.dp),
-            shape = RoundedCornerShape(22.dp),
-            color = Color(0xFF0B0F19),
-            border = BorderStroke(1.dp, Color(0xFF6366F1).copy(alpha = 0.4f)),
-            tonalElevation = 12.dp
+            shape = RoundedCornerShape(16.dp),
+            color = dialogColors.surfaceElevated,
+            border = BorderStroke(1.dp, dialogColors.border),
+            tonalElevation = 4.dp
         ) {
             Column(
                 modifier = Modifier
@@ -222,16 +224,16 @@ fun LocalToolsInstallDialog(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF6366F1).copy(alpha = 0.16f),
-                            modifier = Modifier.size(40.dp)
+                            shape = RoundedCornerShape(10.dp),
+                            color = dialogColors.primary.copy(alpha = 0.14f),
+                            modifier = Modifier.size(38.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Default.Build,
                                     contentDescription = "Local Tools Manager",
-                                    tint = Color(0xFF38BDF8),
-                                    modifier = Modifier.size(20.dp)
+                                    tint = dialogColors.primary,
+                                    modifier = Modifier.size(19.dp)
                                 )
                             }
                         }
@@ -239,8 +241,8 @@ fun LocalToolsInstallDialog(
                             Text(
                                 text = "Local CLI & Agent Toolchain",
                                 style = MaterialTheme.typography.titleMedium.copy(
-                                    color = Color(0xFFF8FAFC),
-                                    fontWeight = FontWeight.Bold
+                                    color = dialogColors.textPrimary,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             )
                             Text(
@@ -306,12 +308,12 @@ fun LocalToolsInstallDialog(
 
                         Surface(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp),
-                            color = Color(0xFF111827),
+                            shape = RoundedCornerShape(10.dp),
+                            color = dialogColors.cardSurface,
                             border = BorderStroke(
                                 1.dp,
-                                if (isInstalled) Color(0xFF10B981).copy(alpha = 0.4f)
-                                else Color(0xFF1E293B)
+                                if (isInstalled) dialogColors.statusEmerald.copy(alpha = 0.45f)
+                                else dialogColors.border
                             )
                         ) {
                             Column(
@@ -333,18 +335,18 @@ fun LocalToolsInstallDialog(
                                             Text(
                                                 text = spec.title,
                                                 style = MaterialTheme.typography.bodyMedium.copy(
-                                                    color = Color(0xFFF8FAFC),
-                                                    fontWeight = FontWeight.SemiBold
+                                                    color = dialogColors.textPrimary,
+                                                    fontWeight = FontWeight.Medium
                                                 )
                                             )
                                             Surface(
                                                 shape = RoundedCornerShape(6.dp),
-                                                color = Color(0xFF6366F1).copy(alpha = 0.16f)
+                                                color = dialogColors.primary.copy(alpha = 0.14f)
                                             ) {
                                                 Text(
                                                     text = spec.category,
                                                     style = MaterialTheme.typography.labelSmall.copy(
-                                                        color = Color(0xFF818CF8),
+                                                        color = dialogColors.primary,
                                                         fontSize = 10.sp
                                                     ),
                                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -441,10 +443,10 @@ fun LocalToolsInstallDialog(
                                                 .heightIn(min = 48.dp)
                                                 .testTag("install_tool_${spec.id}"),
                                             colors = ButtonDefaults.buttonColors(
-                                                containerColor = Color(0xFF6366F1),
-                                                contentColor = Color.White
+                                                containerColor = dialogColors.primary,
+                                                contentColor = dialogColors.onPrimary
                                             ),
-                                            shape = RoundedCornerShape(10.dp)
+                                            shape = RoundedCornerShape(8.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.CloudDownload,

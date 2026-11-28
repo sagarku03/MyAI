@@ -272,24 +272,18 @@ fun GeneralSettingsScreen(
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         // ====================================================================
-        // TOP HEADER: "⚙️ SETTINGS" + [Save Changes] Pill Button
+        // TOP HEADER: Settings + Save Action
         // ====================================================================
         item {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(Color(0xD811162B))
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(JarvisTheme.colors.surface)
                     .border(
                         1.dp,
-                        Brush.horizontalGradient(
-                            listOf(
-                                RoyalPurplePrimary.copy(alpha = 0.65f),
-                                AccentSkyCyan.copy(alpha = 0.55f),
-                                AccentRosePink.copy(alpha = 0.55f)
-                            )
-                        ),
-                        RoundedCornerShape(24.dp)
+                        JarvisTheme.colors.border,
+                        RoundedCornerShape(12.dp)
                     )
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -297,18 +291,14 @@ fun GeneralSettingsScreen(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Box(
                         modifier = Modifier
                             .size(40.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(RoyalPurplePrimary, RoyalIndigoAccent.copy(alpha = 0.85f))
-                                )
-                            )
-                            .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(13.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(JarvisTheme.colors.surfaceElevated)
+                            .border(1.dp, JarvisTheme.colors.border, RoundedCornerShape(8.dp))
                             .clickable(onClick = onBack)
                             .testTag("top_bar_back_button"),
                         contentAlignment = Alignment.Center
@@ -316,63 +306,55 @@ fun GeneralSettingsScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color.White,
+                            tint = JarvisTheme.colors.textPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
                     Column {
                         Text(
-                            text = "Settings Hub",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = TextPureWhite,
-                            fontWeight = FontWeight.ExtraBold
+                            text = "Assistant Settings",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = JarvisTheme.colors.textPrimary,
+                            fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Apple iOS 26 Control Studio",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AccentSkyCyan,
-                            fontWeight = FontWeight.ExtraBold
+                            text = "Voice, appearance & memory",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = JarvisTheme.colors.textSecondary
                         )
                     }
                 }
 
-                // [Save Changes] Vibrant Multi-Color Pill Button
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(
-                            Brush.horizontalGradient(
-                                listOf(RoyalPurplePrimary, AccentRosePink, AccentChampagneGold)
-                            )
-                        )
-                        .border(1.dp, Color.White.copy(alpha = 0.40f), RoundedCornerShape(999.dp))
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(JarvisTheme.colors.accent)
                         .clickable {
                             if (nameInput.isNotBlank()) onUpdateAssistantName(nameInput.trim())
                             onUpdateCustomPersonalityPrompt(customPromptInput)
-                            savedBannerMessage = "All settings saved & synced!"
+                            savedBannerMessage = "Settings saved"
                         }
-                        .padding(horizontal = 16.dp, vertical = 9.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
                         .testTag("btn_save_all_settings")
                 ) {
                     Text(
-                        text = "Save Changes",
+                        text = "Save",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
-                        fontWeight = FontWeight.ExtraBold
+                        color = JarvisTheme.colors.onPrimary,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
         }
 
-        // Dynamic Island Saved Toast Banner
         if (savedBannerMessage != null) {
             item {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(AccentMintEmerald.copy(alpha = 0.22f))
-                        .border(1.dp, AccentMintEmerald.copy(alpha = 0.70f), RoundedCornerShape(999.dp))
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(JarvisTheme.colors.statusEmerald.copy(alpha = 0.14f))
+                        .border(1.dp, JarvisTheme.colors.statusEmerald.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -384,21 +366,21 @@ fun GeneralSettingsScreen(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = null,
-                            tint = AccentMintEmerald,
+                            tint = JarvisTheme.colors.statusEmerald,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
                             text = savedBannerMessage ?: "",
                             style = MaterialTheme.typography.labelMedium,
-                            color = TextPureWhite,
-                            fontWeight = FontWeight.ExtraBold
+                            color = JarvisTheme.colors.textPrimary,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                     Text(
                         text = "Dismiss",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AccentMintEmerald,
-                        fontWeight = FontWeight.ExtraBold,
+                        color = JarvisTheme.colors.statusEmerald,
+                        fontWeight = FontWeight.Medium,
                         modifier = Modifier.clickable { savedBannerMessage = null }
                     )
                 }
@@ -406,36 +388,21 @@ fun GeneralSettingsScreen(
         }
 
         // ====================================================================
-        // HERO STATUS CARD: Apple ID Style Multi-Color Profile & Core Card
+        // ASSISTANT SUMMARY CARD
         // ====================================================================
         item {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(26.dp))
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                RoyalPurplePrimary.copy(alpha = 0.36f),
-                                RoyalIndigoAccent.copy(alpha = 0.28f),
-                                AccentRosePink.copy(alpha = 0.24f),
-                                Color(0xEE11162B)
-                            )
-                        )
-                    )
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(JarvisTheme.colors.cardSurface)
                     .border(
-                        1.5.dp,
-                        Brush.linearGradient(
-                            listOf(
-                                SoftLavenderGlow.copy(alpha = 0.85f),
-                                AccentSkyCyan.copy(alpha = 0.65f),
-                                AccentRosePink.copy(alpha = 0.65f)
-                            )
-                        ),
-                        RoundedCornerShape(26.dp)
+                        1.dp,
+                        JarvisTheme.colors.cardBorder,
+                        RoundedCornerShape(12.dp)
                     )
                     .clickable { activeSheet = SettingsDetailSheet.IDENTITY_AND_LANGUAGE }
-                    .padding(18.dp)
+                    .padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(
@@ -450,9 +417,9 @@ fun GeneralSettingsScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(52.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .border(1.dp, JarvisTheme.colors.border, RoundedCornerShape(10.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Image(
@@ -464,53 +431,47 @@ fun GeneralSettingsScreen(
                             }
                             Column {
                                 Text(
-                                    text = "${settings.assistantName.uppercase()} AI PRO CORE",
+                                    text = settings.assistantName.ifBlank { "Agentra" },
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = TextPureWhite,
-                                    fontWeight = FontWeight.ExtraBold
+                                    color = JarvisTheme.colors.textPrimary,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "Identity (${settings.assistantName}) • ${settings.language.displayName}",
+                                    text = "Language: ${settings.language.displayName}",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    fontWeight = FontWeight.SemiBold
+                                    color = JarvisTheme.colors.textSecondary
                                 )
                             }
                         }
 
-                        // All Systems Go Solid Pill
                         Row(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(
-                                    if (hasConfiguredKey) AccentMintEmerald.copy(alpha = 0.24f)
-                                    else StatusAmber.copy(alpha = 0.24f)
-                                )
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(JarvisTheme.colors.surfaceElevated)
                                 .border(
                                     1.dp,
-                                    if (hasConfiguredKey) AccentMintEmerald else StatusAmber,
-                                    RoundedCornerShape(999.dp)
+                                    JarvisTheme.colors.border,
+                                    RoundedCornerShape(6.dp)
                                 )
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(7.dp)
+                                    .size(8.dp)
                                     .clip(CircleShape)
-                                    .background(if (hasConfiguredKey) AccentMintEmerald else StatusAmber)
+                                    .background(if (hasConfiguredKey) JarvisTheme.colors.statusEmerald else JarvisTheme.colors.statusAmber)
                             )
                             Text(
-                                text = if (hasConfiguredKey) "All Systems Go" else "Key Needed",
+                                text = if (hasConfiguredKey) "Connected" else "Key needed",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = TextPureWhite,
-                                fontWeight = FontWeight.ExtraBold
+                                color = JarvisTheme.colors.textSecondary,
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
 
-                    // Multi-Color Status Chips Row (Sky Cyan Model + Rose Pink Voice + Royal Purple Mode + Gold Theme)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -518,23 +479,23 @@ fun GeneralSettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         HeroSummaryChip(
-                            label = "Screen: ${settings.screenOperatorModel.substringAfterLast("/")} • Voice: ${settings.voiceModel.substringAfterLast("/")} • Router: ${settings.routerModel.substringAfterLast("/")}",
-                            accentColor = AccentSkyCyan,
+                            label = "Screen: ${settings.screenOperatorModel.substringAfterLast("/")} • Voice: ${settings.voiceModel.substringAfterLast("/")}",
+                            accentColor = JarvisTheme.colors.accent,
                             onClick = { activeSheet = SettingsDetailSheet.AI_MODELS_PICKER }
                         )
                         HeroSummaryChip(
                             label = "Voice: ${settings.voicePersona}",
-                            accentColor = AccentRosePink,
+                            accentColor = JarvisTheme.colors.accent,
                             onClick = { activeSheet = SettingsDetailSheet.VOICE_STUDIO }
                         )
                         HeroSummaryChip(
                             label = "Mode: ${settings.personalityMode.title}",
-                            accentColor = RoyalPurplePrimary,
+                            accentColor = JarvisTheme.colors.accent,
                             onClick = { activeSheet = SettingsDetailSheet.PERSONA_AND_18_PLUS }
                         )
                         HeroSummaryChip(
                             label = "Theme: ${settings.themeMode.displayName}",
-                            accentColor = AccentChampagneGold,
+                            accentColor = JarvisTheme.colors.accent,
                             onClick = { activeSheet = SettingsDetailSheet.Appearance_THEME }
                         )
                     }
@@ -543,7 +504,7 @@ fun GeneralSettingsScreen(
         }
 
         // ====================================================================
-        // FROSTED iOS SEARCH BAR
+        // SEARCH BAR
         // ====================================================================
         item {
             OutlinedTextField(
@@ -551,19 +512,19 @@ fun GeneralSettingsScreen(
                 onValueChange = { searchQuery = it },
                 placeholder = {
                     Text(
-                        text = "Search any setting: API Key, Voice, 18+, Wake Word...",
+                        text = "Search settings (API Key, Voice, Theme, Memory...)",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextVioletDim,
-                        fontWeight = FontWeight.SemiBold
+                        color = JarvisTheme.colors.textMuted,
+                        fontWeight = FontWeight.Normal
                     )
                 },
                 singleLine = true,
-                shape = RoundedCornerShape(999.dp),
+                shape = RoundedCornerShape(10.dp),
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = "Search",
-                        tint = AccentSkyCyan
+                        tint = JarvisTheme.colors.textSecondary
                     )
                 },
                 trailingIcon = {
@@ -572,19 +533,19 @@ fun GeneralSettingsScreen(
                             Icon(
                                 imageVector = Icons.Default.Clear,
                                 contentDescription = "Clear",
-                                tint = TextLavenderMuted
+                                tint = JarvisTheme.colors.textSecondary
                             )
                         }
                     }
                 },
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = TextPureWhite,
-                    unfocusedTextColor = TextPureWhite,
-                    focusedContainerColor = LiquidGlassElevated,
-                    unfocusedContainerColor = LiquidGlassSurface,
-                    focusedBorderColor = RoyalPurplePrimary,
-                    unfocusedBorderColor = Color.White.copy(alpha = 0.16f),
-                    cursorColor = AccentSkyCyan
+                    focusedTextColor = JarvisTheme.colors.textPrimary,
+                    unfocusedTextColor = JarvisTheme.colors.textPrimary,
+                    focusedContainerColor = JarvisTheme.colors.inputBackground,
+                    unfocusedContainerColor = JarvisTheme.colors.surface,
+                    focusedBorderColor = JarvisTheme.colors.accent,
+                    unfocusedBorderColor = JarvisTheme.colors.border,
+                    cursorColor = JarvisTheme.colors.accent
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -593,12 +554,12 @@ fun GeneralSettingsScreen(
         }
 
         // ====================================================================
-        // 🎨 APPEARANCE & THEMES ENGINE (Ocean Blue, Royal Purple, Aqua Mint)
+        // APPEARANCE & THEMES ENGINE
         // ====================================================================
-        if (matches("theme appearance color dark light ocean purple mint display mode")) {
+        if (matches("theme appearance color dark light graphite ocean purple mint display mode")) {
             item {
                 LiquidGlassGroupCard(
-                    sectionHeader = "🎨 APPEARANCE & THEMES ENGINE",
+                    sectionHeader = "Appearance & Themes",
                     accentColor = JarvisTheme.colors.accent
                 ) {
                     val activePalette = settings.themePalette
@@ -608,19 +569,18 @@ fun GeneralSettingsScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // 1. Live Interactive Theme Preview Card
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(20.dp))
+                                .clip(RoundedCornerShape(10.dp))
                                 .background(currentColors.background)
-                                .border(1.2.dp, currentColors.border, RoundedCornerShape(20.dp))
-                                .padding(14.dp)
+                                .border(1.dp, currentColors.border, RoundedCornerShape(10.dp))
+                                .padding(12.dp)
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -628,7 +588,7 @@ fun GeneralSettingsScreen(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Box(
                                             modifier = Modifier
@@ -637,83 +597,73 @@ fun GeneralSettingsScreen(
                                                 .background(currentColors.accent)
                                         )
                                         Text(
-                                            text = "LIVE PREVIEW: ${activePalette.displayName.uppercase()}",
+                                            text = "Preview • ${activePalette.displayName}",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = currentColors.textPrimary,
-                                            fontWeight = FontWeight.Black,
-                                            letterSpacing = 0.8.sp
+                                            fontWeight = FontWeight.Medium
                                         )
                                     }
                                     Box(
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(999.dp))
-                                            .background(currentColors.accent.copy(alpha = 0.20f))
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(currentColors.accent.copy(alpha = 0.14f))
                                             .padding(horizontal = 8.dp, vertical = 2.dp)
                                     ) {
                                         Text(
-                                            text = activeDisplayMode.displayName.uppercase(),
+                                            text = activeDisplayMode.displayName,
                                             style = MaterialTheme.typography.labelSmall,
                                             color = currentColors.accent,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 9.sp
+                                            fontWeight = FontWeight.Medium
                                         )
                                     }
                                 }
 
-                                // Mock User Bubble
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.End
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
-                                            .background(
-                                                Brush.horizontalGradient(
-                                                    listOf(currentColors.accent, currentColors.primary)
-                                                )
-                                            )
+                                            .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 4.dp, bottomStart = 12.dp, bottomEnd = 12.dp))
+                                            .background(currentColors.accent)
                                             .padding(horizontal = 12.dp, vertical = 8.dp)
                                     ) {
                                         Text(
-                                            text = "Hey Agentra, check system status",
+                                            text = "Check system status",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
+                                            color = currentColors.onPrimary,
+                                            fontWeight = FontWeight.Normal
                                         )
                                     }
                                 }
 
-                                // Mock Agentra Bubble
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.Start
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
+                                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 12.dp, bottomStart = 12.dp, bottomEnd = 12.dp))
                                             .background(currentColors.surface)
-                                            .border(1.dp, currentColors.border, RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
+                                            .border(1.dp, currentColors.border, RoundedCornerShape(topStart = 4.dp, topEnd = 12.dp, bottomStart = 12.dp, bottomEnd = 12.dp))
                                             .padding(horizontal = 12.dp, vertical = 8.dp)
                                     ) {
                                         Text(
-                                            text = "All systems operational. Theme synchronized.",
+                                            text = "Theme synced cleanly across surfaces.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = currentColors.textPrimary,
-                                            fontWeight = FontWeight.Medium
+                                            fontWeight = FontWeight.Normal
                                         )
                                     }
                                 }
                             }
                         }
 
-                        // 2. Curated Reference Palette Preset Pills
                         Text(
-                            text = "COLOR PALETTE PRESET",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = currentColors.textMuted,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 0.8.sp
+                            text = "Palette",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = currentColors.textSecondary,
+                            fontWeight = FontWeight.Medium
                         )
 
                         Row(
@@ -725,26 +675,28 @@ fun GeneralSettingsScreen(
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clip(RoundedCornerShape(16.dp))
+                                        .clip(RoundedCornerShape(10.dp))
                                         .background(
-                                            if (selected) palette.previewColor.copy(alpha = 0.22f)
-                                            else currentColors.surface.copy(alpha = 0.60f)
+                                            if (selected) palette.previewColor.copy(alpha = 0.14f)
+                                            else currentColors.surfaceElevated
                                         )
                                         .border(
-                                            width = if (selected) 1.6.dp else 1.dp,
+                                            width = 1.dp,
                                             color = if (selected) palette.previewColor else currentColors.border,
-                                            shape = RoundedCornerShape(16.dp)
+                                            shape = RoundedCornerShape(10.dp)
                                         )
                                         .clickable {
                                             onUpdateThemePalette(palette)
                                             val resolved = when (activeDisplayMode) {
                                                 ThemeDisplayMode.SYSTEM -> JarvisThemeMode.SYSTEM_DEFAULT
                                                 ThemeDisplayMode.LIGHT -> when (palette) {
+                                                    ThemePalette.GRAPHITE -> JarvisThemeMode.GRAPHITE_LIGHT
                                                     ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_LIGHT
                                                     ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_LIGHT
                                                     ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_LIGHT
                                                 }
                                                 ThemeDisplayMode.DARK -> when (palette) {
+                                                    ThemePalette.GRAPHITE -> JarvisThemeMode.GRAPHITE_DARK
                                                     ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_DARK
                                                     ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_DARK
                                                     ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_DARK
@@ -752,7 +704,7 @@ fun GeneralSettingsScreen(
                                             }
                                             onUpdateThemeMode(resolved)
                                         }
-                                        .padding(vertical = 10.dp, horizontal = 6.dp)
+                                        .padding(vertical = 10.dp, horizontal = 4.dp)
                                         .testTag("palette_preset_${palette.id}"),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -762,7 +714,7 @@ fun GeneralSettingsScreen(
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .size(16.dp)
+                                                .size(14.dp)
                                                 .clip(CircleShape)
                                                 .background(palette.previewColor)
                                         )
@@ -770,29 +722,27 @@ fun GeneralSettingsScreen(
                                             text = palette.displayName,
                                             style = MaterialTheme.typography.labelSmall,
                                             color = if (selected) currentColors.textPrimary else currentColors.textSecondary,
-                                            fontWeight = if (selected) FontWeight.Black else FontWeight.Bold,
-                                            fontSize = 11.sp
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                            maxLines = 1
                                         )
                                     }
                                 }
                             }
                         }
 
-                        // 3. Display Mode Segmented Selector (Light, Dark, System Default)
                         Text(
-                            text = "DISPLAY MODE",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = currentColors.textMuted,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 0.8.sp
+                            text = "Display mode",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = currentColors.textSecondary,
+                            fontWeight = FontWeight.Medium
                         )
 
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(currentColors.surface.copy(alpha = 0.80f))
-                                .border(1.dp, currentColors.border, RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(currentColors.surfaceElevated)
+                                .border(1.dp, currentColors.border, RoundedCornerShape(10.dp))
                                 .padding(4.dp),
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
@@ -811,11 +761,13 @@ fun GeneralSettingsScreen(
                                             val resolved = when (mode) {
                                                 ThemeDisplayMode.SYSTEM -> JarvisThemeMode.SYSTEM_DEFAULT
                                                 ThemeDisplayMode.LIGHT -> when (activePalette) {
+                                                    ThemePalette.GRAPHITE -> JarvisThemeMode.GRAPHITE_LIGHT
                                                     ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_LIGHT
                                                     ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_LIGHT
                                                     ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_LIGHT
                                                 }
                                                 ThemeDisplayMode.DARK -> when (activePalette) {
+                                                    ThemePalette.GRAPHITE -> JarvisThemeMode.GRAPHITE_DARK
                                                     ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_DARK
                                                     ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_DARK
                                                     ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_DARK
@@ -848,8 +800,8 @@ fun GeneralSettingsScreen(
         if (matches("api key gemini model flash pro cloud endpoint sync connection keystore")) {
             item {
                 LiquidGlassGroupCard(
-                    sectionHeader = "🔑 SECTION 1: AI ENGINE & API KEYS",
-                    accentColor = AccentChampagneGold
+                    sectionHeader = "AI Engine & API Keys",
+                    accentColor = JarvisTheme.colors.primary
                 ) {
                     // Row 1: Gemini API Keys & Keystore Vault
                     IosGroupedSettingRow(
@@ -900,8 +852,8 @@ fun GeneralSettingsScreen(
         if (matches("voice audio wake word hey agentra jarvis speed pitch aoede charon female male duplex speak")) {
             item {
                 LiquidGlassGroupCard(
-                    sectionHeader = "🗣️ SECTION 2: VOICE, AUDIO & WAKE WORD",
-                    accentColor = AccentSkyCyan
+                    sectionHeader = "Voice, Audio & Wake Word",
+                    accentColor = JarvisTheme.colors.primary
                 ) {
                     // Row 1: AI Voice Studio (Voice Name, Speed, Pitch)
                     IosGroupedSettingRow(
@@ -1007,14 +959,14 @@ fun GeneralSettingsScreen(
                                 color = (if (isMaleVoiceSelected) AccentSkyCyan else AccentRosePink).copy(alpha = 0.16f),
                                 border = BorderStroke(
                                     1.dp,
-                                    (if (isMaleVoiceSelected) AccentSkyCyan else AccentRosePink).copy(alpha = 0.45f)
+                                    JarvisTheme.colors.borderHighlight
                                 )
                             ) {
                                 Text(
                                     text = if (isMaleVoiceSelected) "Google Puck (Male)" else "Google Aoede (Female)",
-                                    color = if (isMaleVoiceSelected) AccentSkyCyan else AccentRosePink,
+                                    color = JarvisTheme.colors.primary,
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
+                                    fontWeight = FontWeight.Medium,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                                 )
                             }
@@ -1024,7 +976,7 @@ fun GeneralSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            // Option 1: 👨 Male (Google Puck)
+                            // Option 1: Male (Google Puck)
                             Surface(
                                 onClick = {
                                     onUpdateVoiceGender(VoiceGender.MALE)
@@ -1033,15 +985,15 @@ fun GeneralSettingsScreen(
                                     .weight(1f)
                                     .heightIn(min = 48.dp)
                                     .testTag("voice_gender_male_option"),
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 color = if (isMaleVoiceSelected) {
-                                    AccentSkyCyan.copy(alpha = 0.22f)
+                                    JarvisTheme.colors.primary.copy(alpha = 0.14f)
                                 } else {
-                                    Color.White.copy(alpha = 0.05f)
+                                    JarvisTheme.colors.surfacePill
                                 },
                                 border = BorderStroke(
-                                    width = if (isMaleVoiceSelected) 1.5.dp else 1.dp,
-                                    color = if (isMaleVoiceSelected) AccentSkyCyan else Color.White.copy(alpha = 0.14f)
+                                    width = 1.dp,
+                                    color = if (isMaleVoiceSelected) JarvisTheme.colors.primary else JarvisTheme.colors.border
                                 )
                             ) {
                                 Row(
@@ -1055,23 +1007,23 @@ fun GeneralSettingsScreen(
                                         selected = isMaleVoiceSelected,
                                         onClick = null,
                                         colors = RadioButtonDefaults.colors(
-                                            selectedColor = AccentSkyCyan,
-                                            unselectedColor = TextLavenderMuted
+                                            selectedColor = JarvisTheme.colors.primary,
+                                            unselectedColor = JarvisTheme.colors.textSecondary
                                         )
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "👨 Male (Puck)",
-                                        color = if (isMaleVoiceSelected) TextPureWhite else TextLavenderMuted,
+                                        text = "Male (Puck)",
+                                        color = if (isMaleVoiceSelected) JarvisTheme.colors.textPrimary else JarvisTheme.colors.textSecondary,
                                         fontSize = 12.5.sp,
-                                        fontWeight = if (isMaleVoiceSelected) FontWeight.Bold else FontWeight.Medium,
+                                        fontWeight = if (isMaleVoiceSelected) FontWeight.SemiBold else FontWeight.Medium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
 
-                            // Option 2: 👩 Female (Google Aoede)
+                            // Option 2: Female (Google Aoede)
                             Surface(
                                 onClick = {
                                     onUpdateVoiceGender(VoiceGender.FEMALE)
@@ -1080,15 +1032,15 @@ fun GeneralSettingsScreen(
                                     .weight(1f)
                                     .heightIn(min = 48.dp)
                                     .testTag("voice_gender_female_option"),
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 color = if (!isMaleVoiceSelected) {
-                                    AccentRosePink.copy(alpha = 0.22f)
+                                    JarvisTheme.colors.primary.copy(alpha = 0.14f)
                                 } else {
-                                    Color.White.copy(alpha = 0.05f)
+                                    JarvisTheme.colors.surfacePill
                                 },
                                 border = BorderStroke(
-                                    width = if (!isMaleVoiceSelected) 1.5.dp else 1.dp,
-                                    color = if (!isMaleVoiceSelected) AccentRosePink else Color.White.copy(alpha = 0.14f)
+                                    width = 1.dp,
+                                    color = if (!isMaleVoiceSelected) JarvisTheme.colors.primary else JarvisTheme.colors.border
                                 )
                             ) {
                                 Row(
@@ -1102,16 +1054,16 @@ fun GeneralSettingsScreen(
                                         selected = !isMaleVoiceSelected,
                                         onClick = null,
                                         colors = RadioButtonDefaults.colors(
-                                            selectedColor = AccentRosePink,
-                                            unselectedColor = TextLavenderMuted
+                                            selectedColor = JarvisTheme.colors.primary,
+                                            unselectedColor = JarvisTheme.colors.textSecondary
                                         )
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "👩 Female (Aoede)",
-                                        color = if (!isMaleVoiceSelected) TextPureWhite else TextLavenderMuted,
+                                        text = "Female (Aoede)",
+                                        color = if (!isMaleVoiceSelected) JarvisTheme.colors.textPrimary else JarvisTheme.colors.textSecondary,
                                         fontSize = 12.5.sp,
-                                        fontWeight = if (!isMaleVoiceSelected) FontWeight.Bold else FontWeight.Medium,
+                                        fontWeight = if (!isMaleVoiceSelected) FontWeight.SemiBold else FontWeight.Medium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -1129,8 +1081,8 @@ fun GeneralSettingsScreen(
         if (matches("personality companion romantic 18+ adult intimate girlfriend mood proactive emotion custom prompt")) {
             item {
                 LiquidGlassGroupCard(
-                    sectionHeader = "💕 SECTION 3: PERSONALITY & COMPANION MODES",
-                    accentColor = AccentRosePink
+                    sectionHeader = "Personality & Companion Modes",
+                    accentColor = JarvisTheme.colors.primary
                 ) {
                     // Row 1: 1-Tap Female Voice Companion Mode
                     val isCompanionActive = companionModeState == CompanionModeState.ACTIVE
@@ -1202,8 +1154,8 @@ fun GeneralSettingsScreen(
         if (matches("autonomous agent accessibility overlay bubble react steps permissions workflow notifications controls")) {
             item {
                 LiquidGlassGroupCard(
-                    sectionHeader = "🤖 SECTION 4: AUTONOMOUS AGENT & SYSTEM PERMISSIONS",
-                    accentColor = RoyalPurplePrimary
+                    sectionHeader = "Autonomous Agent & Permissions",
+                    accentColor = JarvisTheme.colors.primary
                 ) {
                     // Row 1: Accessibility Service & Screen Control
                     IosGroupedSettingRow(
@@ -1253,8 +1205,8 @@ fun GeneralSettingsScreen(
         if (matches("security biometric fingerprint privacy redact vault payment confirm high risk")) {
             item {
                 LiquidGlassGroupCard(
-                    sectionHeader = "🛡️ SECTION 5: SECURITY, BIOMETRICS & PRIVACY VAULT",
-                    accentColor = AccentMintEmerald
+                    sectionHeader = "Security, Biometrics & Privacy",
+                    accentColor = JarvisTheme.colors.primary
                 ) {
                     // Row 1: Biometric Gate for Payments & High-Risk Actions
                     IosGroupedToggleRow(
@@ -1305,8 +1257,8 @@ fun GeneralSettingsScreen(
         if (matches("memory vault backup export clear chat reset history theme appearance")) {
             item {
                 LiquidGlassGroupCard(
-                    sectionHeader = "🧠 SECTION 6: MEMORY, BACKUP & APPEARANCE",
-                    accentColor = RoyalIndigoAccent
+                    sectionHeader = "Memory, Backup & Appearance",
+                    accentColor = JarvisTheme.colors.primary
                 ) {
                     // Row 1: 5-Tier Memory Manager & Fact Review
                     IosGroupedSettingRow(
@@ -1631,16 +1583,16 @@ fun GeneralSettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "👁️ DECK 1: SCREEN OPERATOR & AUTOMATION SLOT",
+                            text = "Deck 1 · Screen Operator Slot",
                             style = MaterialTheme.typography.labelMedium,
-                            color = AccentSkyCyan,
-                            fontWeight = FontWeight.ExtraBold
+                            color = JarvisTheme.colors.primary,
+                            fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Sync Cloud ↻",
+                            text = "Sync Cloud",
                             style = MaterialTheme.typography.labelSmall,
-                            color = SoftLavenderGlow,
-                            fontWeight = FontWeight.ExtraBold,
+                            color = JarvisTheme.colors.textSecondary,
+                            fontWeight = FontWeight.Medium,
                             modifier = Modifier
                                 .clickable {
                                     val candidate = apiKeyInput.trim().ifBlank { currentApiKey }
@@ -1721,10 +1673,10 @@ fun GeneralSettingsScreen(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
-                        text = "🎙️ DECK 2: GEMINI LIVE VOICE WEBSOCKET SLOT",
+                        text = "Deck 2 · Live Voice WebSocket Slot",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AccentRosePink,
-                        fontWeight = FontWeight.ExtraBold
+                        color = JarvisTheme.colors.primary,
+                        fontWeight = FontWeight.SemiBold
                     )
 
                     Row(
@@ -1796,10 +1748,10 @@ fun GeneralSettingsScreen(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
-                        text = "⚡ DECK 3: INSTANT INTENT ROUTER & FAST MEMORY SLOT",
+                        text = "Deck 3 · Intent Router & Memory Slot",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AccentChampagneGold,
-                        fontWeight = FontWeight.ExtraBold
+                        color = JarvisTheme.colors.primary,
+                        fontWeight = FontWeight.SemiBold
                     )
 
                     Row(
@@ -2541,23 +2493,20 @@ private fun HeroSummaryChip(
     accentColor: Color,
     onClick: () -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(
-                Brush.horizontalGradient(
-                    listOf(accentColor.copy(alpha = 0.30f), accentColor.copy(alpha = 0.16f))
-                )
-            )
-            .border(1.dp, accentColor.copy(alpha = 0.70f), RoundedCornerShape(999.dp))
+            .clip(RoundedCornerShape(8.dp))
+            .background(accentColor.copy(alpha = 0.14f))
+            .border(1.dp, accentColor.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
-            fontWeight = FontWeight.ExtraBold
+            color = themeColors.textPrimary,
+            fontWeight = FontWeight.Medium
         )
     }
 }
@@ -2596,35 +2545,28 @@ private fun IosGroupedSettingRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f)
         ) {
-            // 100% Solid Vibrant Gradient Apple iOS Squircle Icon Badge
+            // Calm Tonal Icon Container
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                iconBadgeColor,
-                                iconBadgeColor.copy(alpha = 0.72f)
-                            )
-                        )
-                    )
-                    .border(1.dp, Color.White.copy(alpha = 0.36f), RoundedCornerShape(12.dp)),
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(iconBadgeColor.copy(alpha = 0.12f))
+                    .border(1.dp, iconBadgeColor.copy(alpha = 0.28f), RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = title,
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                    tint = iconBadgeColor,
+                    modifier = Modifier.size(19.dp)
                 )
             }
             Column(modifier = Modifier.padding(end = 6.dp)) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = TextPureWhite,
-                    fontWeight = FontWeight.ExtraBold,
+                    color = JarvisTheme.colors.textPrimary,
+                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -2697,35 +2639,28 @@ private fun IosGroupedToggleRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f)
         ) {
-            // 100% Solid Vibrant Gradient Apple iOS Squircle Icon Badge
+            // Calm Tonal Icon Container
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                iconBadgeColor,
-                                iconBadgeColor.copy(alpha = 0.72f)
-                            )
-                        )
-                    )
-                    .border(1.dp, Color.White.copy(alpha = 0.36f), RoundedCornerShape(12.dp)),
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(iconBadgeColor.copy(alpha = 0.12f))
+                    .border(1.dp, iconBadgeColor.copy(alpha = 0.28f), RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = title,
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                    tint = iconBadgeColor,
+                    modifier = Modifier.size(19.dp)
                 )
             }
             Column(modifier = Modifier.padding(end = 8.dp)) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = TextPureWhite,
-                    fontWeight = FontWeight.ExtraBold
+                    color = JarvisTheme.colors.textPrimary,
+                    fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(

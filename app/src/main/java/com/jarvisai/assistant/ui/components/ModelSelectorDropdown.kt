@@ -55,6 +55,7 @@ fun ModelSelectorDropdown(
     onOpenCactusManager: () -> Unit = {},
     onModelSelect: (modelId: String, displayName: String) -> Unit
 ) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     val cactusStatus by com.jarvisai.assistant.cactus.CactusNativeRuntime.status.collectAsState()
     val cactusModelStates by com.jarvisai.assistant.cactus.CactusNativeRuntime.modelStates.collectAsState()
     val tierBadgeLabel = remember(antigravityTier) {
@@ -65,17 +66,16 @@ fun ModelSelectorDropdown(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
         modifier = Modifier
-            .background(Color(0xFF141821))
+            .background(themeColors.surfaceElevated)
             .width(330.dp)
             .heightIn(max = 520.dp)
     ) {
-        // Quick Thinking Depth Selector Trigger (moved into Model Selector menu for clean UI)
         val thinkingTint = when (thinkingLevelLabel.lowercase()) {
-            "off" -> Color(0xFF64748B)
-            "low" -> Color(0xFF10B981)
-            "high" -> Color(0xFFA78BFA)
-            "extra" -> Color(0xFFF59E0B)
-            else -> Color(0xFF00E5FF)
+            "off" -> themeColors.textMuted
+            "low" -> themeColors.statusEmerald
+            "high" -> themeColors.accent
+            "extra" -> themeColors.statusAmber
+            else -> themeColors.accent
         }
         DropdownMenuItem(
             text = {
@@ -94,21 +94,21 @@ fun ModelSelectorDropdown(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Thinking Depth",
-                            color = Color.White,
+                            color = themeColors.textPrimary,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.Medium
                         )
                     }
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = thinkingTint.copy(alpha = 0.18f)
+                        color = thinkingTint.copy(alpha = 0.14f)
                     ) {
                         Text(
-                            text = if (isThinkingEnabled) thinkingLevelLabel.uppercase() else "OFF",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
+                            text = if (isThinkingEnabled) thinkingLevelLabel else "Off",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
                             color = thinkingTint,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
                 }
@@ -120,35 +120,35 @@ fun ModelSelectorDropdown(
             modifier = Modifier.testTag("topbar_thinking_selector_pill")
         )
 
-        HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
+        HorizontalDivider(color = themeColors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
-        // --- SECTION 1: GOOGLE DEEPMIND ANTIGRAVITY (ACCOUNT-ENTITLED MODELS ONLY) ---
+        // --- SECTION 1: ANTIGRAVITY ACCOUNT MODELS ---
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 6.dp),
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "☁️ ANTIGRAVITY",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF00E5FF)
+                    text = "Antigravity",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = themeColors.textMuted
                 )
                 if (isAntigravityLoggedIn) {
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(4.dp),
-                        color = Color(0xFFA78BFA).copy(alpha = 0.2f)
+                        color = themeColors.surfacePill
                     ) {
                         Text(
                             text = tierBadgeLabel,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFA78BFA),
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = themeColors.textSecondary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
@@ -158,15 +158,15 @@ fun ModelSelectorDropdown(
                     CircularProgressIndicator(
                         modifier = Modifier.size(14.dp),
                         strokeWidth = 2.dp,
-                        color = Color(0xFF00E5FF)
+                        color = themeColors.accent
                     )
                 } else {
                     Icon(
                         imageVector = Icons.Default.Refresh,
                         contentDescription = "Refresh Antigravity Models",
-                        tint = Color(0xFF00E5FF),
+                        tint = themeColors.textSecondary,
                         modifier = Modifier
-                            .size(18.dp)
+                            .size(16.dp)
                             .clip(CircleShape)
                             .clickable { onRefreshAntigravityModels() }
                             .testTag("dropdown_refresh_agy_models")
@@ -177,10 +177,10 @@ fun ModelSelectorDropdown(
 
         if (!isAntigravityLoggedIn) {
             ModelMenuItem(
-                title = "🔐 Sign in with Google Antigravity",
-                subtitle = "Sign in to load only the models supported by your Gmail / Pro / Ultra account",
-                badge = "LOGIN",
-                badgeColor = Color(0xFF00E5FF),
+                title = "Sign in with Google Antigravity",
+                subtitle = "Load models and quotas linked to your account",
+                badge = "Sign in",
+                badgeColor = themeColors.accent,
                 onClick = {
                     onDismissRequest()
                     onOpenAntigravityLogin()
@@ -189,154 +189,145 @@ fun ModelSelectorDropdown(
         } else if (antigravityModels.isEmpty()) {
             ModelMenuItem(
                 title = if (isRefreshingAntigravityModels) {
-                    "⏳ Loading your Antigravity models..."
+                    "Loading Antigravity models..."
                 } else {
-                    "🔄 Sync Account Models"
+                    "Sync Account Models"
                 },
-                subtitle = "Tap to fetch supported models & quota for your account",
-                badge = "SYNC",
-                badgeColor = Color(0xFFF59E0B),
+                subtitle = "Fetch supported models and quota for your account",
+                badge = "Sync",
+                badgeColor = themeColors.statusAmber,
                 onClick = { onRefreshAntigravityModels() }
             )
         } else {
             antigravityModels.forEach { agyModel ->
                 val quotaPct = agyModel.quotaPercent
                 val quotaColor = when {
-                    quotaPct <= 15 -> Color(0xFFEF4444)
-                    quotaPct <= 40 -> Color(0xFFF59E0B)
-                    else -> Color(0xFF10B981)
-                }
-                val emoji = when {
-                    agyModel.id.contains("orchestrator", true) -> "🕸️"
-                    agyModel.id.contains("carbon", true) -> "🧠"
-                    agyModel.id.contains("argon", true) -> "⚡"
-                    agyModel.id.contains("hydrogen", true) -> "🚀"
-                    agyModel.id.contains("claude", true) || agyModel.id.contains("opus", true) || agyModel.id.contains("sonnet", true) -> "🎭"
-                    agyModel.id.contains("oss", true) -> "🧩"
-                    else -> "☁️"
+                    quotaPct <= 15 -> themeColors.statusRoseRed
+                    quotaPct <= 40 -> themeColors.statusAmber
+                    else -> themeColors.statusEmerald
                 }
                 val thinkingHint = if (agyModel.supportsThinking) {
                     "Thinking ($thinkingLevelLabel)"
                 } else {
-                    "Direct Mode"
+                    "Direct"
                 }
                 val tagExtra = agyModel.tagTitle.takeIf { it.isNotBlank() }?.let { " • $it" }.orEmpty()
-                val badgeText = if (agyModel.isRecommended) "REC • $quotaPct%" else "$quotaPct%"
+                val badgeText = if (agyModel.isRecommended) "Rec • $quotaPct%" else "$quotaPct%"
                 val cleanDisplay = agyModel.displayName.ifBlank { agyModel.id }
 
                 ModelMenuItem(
-                    title = "$emoji $cleanDisplay",
+                    title = cleanDisplay,
                     subtitle = "$thinkingHint • Quota $quotaPct%$tagExtra",
                     badge = badgeText,
                     badgeColor = quotaColor,
                     onClick = {
-                        onModelSelect("agy:${agyModel.id}", "☁️ Antigravity • $cleanDisplay")
+                        onModelSelect("agy:${agyModel.id}", "Antigravity • $cleanDisplay")
                         onDismissRequest()
                     }
                 )
             }
         }
 
-        HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
+        HorizontalDivider(color = themeColors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
-        // --- SECTION 2: GOOGLE AI STUDIO • DEVELOPER API ---
-        ModelDropdownSectionHeader("⚡ GOOGLE AI STUDIO • DEVELOPER API")
+        // --- SECTION 2: GOOGLE AI STUDIO ---
+        ModelDropdownSectionHeader("Google AI Studio")
 
         ModelMenuItem(
-            title = "🚀 Gemini 4 Hydrogen",
-            subtitle = "Gemini 4 Flagship High-Efficiency • Low/Med/High/xHigh Thinking",
-            badge = "NEW FREE",
-            badgeColor = Color(0xFF10B981),
+            title = "Gemini 4 Hydrogen",
+            subtitle = "High efficiency • Low / Med / High / xHigh thinking",
+            badge = "Free",
+            badgeColor = themeColors.statusEmerald,
             onClick = {
-                onModelSelect("gemini-4-hydrogen", "⚡ Google AI Studio • Gemini 4 Hydrogen")
+                onModelSelect("gemini-4-hydrogen", "Google AI Studio • Gemini 4 Hydrogen")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "⚡ Gemini 4 Argon",
-            subtitle = "Gemini 4 Deep Reasoning & Coding • 1M Context (Paid Tier)",
-            badge = "GEMINI 4",
-            badgeColor = Color(0xFFA78BFA),
+            title = "Gemini 4 Argon",
+            subtitle = "Deep reasoning & coding • 1M context",
+            badge = "Gemini 4",
+            badgeColor = themeColors.accent,
             onClick = {
-                onModelSelect("gemini-4-argon", "⚡ Google AI Studio • Gemini 4 Argon")
+                onModelSelect("gemini-4-argon", "Google AI Studio • Gemini 4 Argon")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "⚡ Gemini 3.8 Flash",
-            subtitle = "Flagship Multimodal • Supports Off/Low/Med/High Thinking",
-            badge = "DEFAULT",
-            badgeColor = Color(0xFF00E5FF),
+            title = "Gemini 3.8 Flash",
+            subtitle = "Multimodal • Configurable thinking depth",
+            badge = "Default",
+            badgeColor = themeColors.accent,
             onClick = {
-                onModelSelect("gemini-3.8-flash", "⚡ Google AI Studio • Gemini 3.8 Flash")
+                onModelSelect("gemini-3.8-flash", "Google AI Studio • Gemini 3.8 Flash")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "🚀 Gemini 3.5 Flash Lite",
-            subtitle = "Ultra-Low Latency Intent Router • 30 RPM • Free Tier",
-            badge = "FAST $0",
-            badgeColor = Color(0xFF10B981),
+            title = "Gemini 3.5 Flash Lite",
+            subtitle = "Low-latency router • 30 RPM • Free tier",
+            badge = "Fast",
+            badgeColor = themeColors.statusEmerald,
             onClick = {
-                onModelSelect("gemini-3.5-flash-lite", "⚡ Google AI Studio • Gemini 3.5 Lite")
+                onModelSelect("gemini-3.5-flash-lite", "Google AI Studio • Gemini 3.5 Lite")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "🛡️ Gemini 3.1 Flash Lite",
-            subtitle = "Stable High-Throughput Workhorse • 1M Context",
-            badge = "STABLE",
-            badgeColor = Color(0xFF38BDF8),
+            title = "Gemini 3.1 Flash Lite",
+            subtitle = "High-throughput workhorse • 1M context",
+            badge = "Stable",
+            badgeColor = themeColors.accent,
             onClick = {
-                onModelSelect("gemini-3.1-flash-lite", "⚡ Google AI Studio • Gemini 3.1 Lite")
+                onModelSelect("gemini-3.1-flash-lite", "Google AI Studio • Gemini 3.1 Lite")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "👑 Gemini 2.5 Pro",
-            subtitle = "2M Context Window • Deep Codebase Analysis",
-            badge = "2M CTX",
-            badgeColor = Color(0xFFA78BFA),
+            title = "Gemini 2.5 Pro",
+            subtitle = "2M context window • Codebase analysis",
+            badge = "2M ctx",
+            badgeColor = themeColors.accent,
             onClick = {
-                onModelSelect("gemini-2.5-pro", "⚡ Google AI Studio • Gemini 2.5 Pro")
+                onModelSelect("gemini-2.5-pro", "Google AI Studio • Gemini 2.5 Pro")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "🎙️ Gemini Live Voice",
-            subtitle = "Sub-500ms Native Audio Preview • Zero Delay",
-            badge = "LIVE BIDI",
-            badgeColor = Color(0xFF00E5FF),
+            title = "Gemini Live Voice",
+            subtitle = "Low-latency bidirectional voice stream",
+            badge = "Live",
+            badgeColor = themeColors.accent,
             onClick = {
-                onModelSelect("gemini-3.8-live", "⚡ Google AI Studio • Live Voice")
+                onModelSelect("gemini-3.8-live", "Google AI Studio • Live Voice")
                 onDismissRequest()
             }
         )
 
-        HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
+        HorizontalDivider(color = themeColors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
-        // --- SECTION 2.5: CACTUS COMPUTE ON-DEVICE AI (100% OFFLINE) ---
-        ModelDropdownSectionHeader("🌵 CACTUS ON-DEVICE AI (OFFLINE)")
+        // --- SECTION 2.5: CACTUS ON-DEVICE AI ---
+        ModelDropdownSectionHeader("On-Device (Offline)")
 
         com.jarvisai.assistant.cactus.CactusModelCatalog.chatCapableModels().forEach { spec ->
             val installed = cactusModelStates[spec.id]?.isDownloaded == true
             val badgeText = when {
-                spec.isInProcessSdkModel && installed -> "IN-APP READY"
-                installed && spec.runtime == com.jarvisai.assistant.cactus.CactusModelRuntime.NATIVE_V4_CACT -> "READY"
-                cactusStatus.isServerRunning && !spec.isInProcessSdkModel -> "ONLINE"
-                spec.isExternalServerOnly -> "EXT SERVER"
-                else -> "${spec.estimatedDownloadMb}MB"
+                spec.isInProcessSdkModel && installed -> "Ready"
+                installed && spec.runtime == com.jarvisai.assistant.cactus.CactusModelRuntime.NATIVE_V4_CACT -> "Ready"
+                cactusStatus.isServerRunning && !spec.isInProcessSdkModel -> "Online"
+                spec.isExternalServerOnly -> "External"
+                else -> "${spec.estimatedDownloadMb} MB"
             }
             val badgeCol = when {
-                (spec.isInProcessSdkModel && installed) || cactusStatus.isServerRunning -> Color(0xFF10B981)
-                installed -> Color(0xFF00E5FF)
-                else -> Color(0xFF64748B)
+                (spec.isInProcessSdkModel && installed) || cactusStatus.isServerRunning -> themeColors.statusEmerald
+                installed -> themeColors.accent
+                else -> themeColors.textMuted
             }
             val runtimeTag = when (spec.runtime) {
                 com.jarvisai.assistant.cactus.CactusModelRuntime.IN_PROCESS_SDK -> "In-App JNI"
@@ -344,81 +335,81 @@ fun ModelSelectorDropdown(
                 com.jarvisai.assistant.cactus.CactusModelRuntime.EXTERNAL_OPENAI -> "External Server"
             }
             ModelMenuItem(
-                title = "🌵 ${spec.displayName}",
+                title = spec.displayName,
                 subtitle = "${spec.parameterLabel} • $runtimeTag • ${spec.recommendedRamGb}GB+ RAM" +
                     if (spec.supportsToolCalling) " • Local Tools" else "",
                 badge = badgeText,
                 badgeColor = badgeCol,
                 onClick = {
-                    onModelSelect(spec.id, "🌵 Cactus • ${spec.displayName}")
+                    onModelSelect(spec.id, "Cactus • ${spec.displayName}")
                     onDismissRequest()
                 }
             )
         }
 
         ModelMenuItem(
-            title = "⚙️ Manage Cactus Engine & Models",
+            title = "Manage Offline Models",
             subtitle = when {
                 cactusStatus.sdkSupported && cactusModelStates.values.any { it.isDownloaded } ->
-                    "In-App JNI READY • Download Qwen3, Gemma 3, LFM2-VL Vision, Whisper & RAG"
+                    "JNI runtime ready • Qwen3, Gemma 3, LFM2-VL, Whisper"
                 cactusStatus.isServerRunning ->
-                    "Server ONLINE • Download LLM, VLM, STT & Embeddings"
+                    "Server running • Manage LLM, VLM, STT and embeddings"
                 else ->
-                    "Download offline Qwen3 / LFM2-VL (in-app) or install Cactus v4 binary"
+                    "Download Qwen3 / LFM2-VL or configure Cactus runtime"
             },
-            badge = if (cactusStatus.isServerRunning || (cactusStatus.sdkSupported && cactusModelStates.values.any { it.isDownloaded })) "ACTIVE" else "SETUP",
-            badgeColor = Color(0xFF00E5FF),
+            badge = if (cactusStatus.isServerRunning || (cactusStatus.sdkSupported && cactusModelStates.values.any { it.isDownloaded })) "Active" else "Setup",
+            badgeColor = themeColors.accent,
             onClick = {
                 onDismissRequest()
                 onOpenCactusManager()
             }
         )
 
-        HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
+        HorizontalDivider(color = themeColors.divider, modifier = Modifier.padding(vertical = 4.dp))
 
-        // --- SECTION 3: IN-APP & TERMINAL CODING AGENTS (ISOLATED FROM ANTIGEM) ---
-        ModelDropdownSectionHeader("IN-APP & TERMINAL CODING AGENTS (ISOLATED)")
+        // --- SECTION 3: CODING AGENTS ---
+        ModelDropdownSectionHeader("Workspace Coding Agents")
 
         ModelMenuItem(
-            title = "⚡ Antigravity Autonomous Agent (:2235)",
-            subtitle = "Isolated Cascade Hub (:2235) + MCP (:2236/:2237) + Sora IDE",
-            badge = "PORT 2235",
-            badgeColor = Color(0xFF00E5FF),
+            title = "Antigravity Agent (:2235)",
+            subtitle = "Cascade Hub (:2235) + MCP (:2236/:2237) + Sora IDE",
+            badge = ":2235",
+            badgeColor = themeColors.accent,
             onClick = {
-                onModelSelect("antigravity-agent", "☁️ Antigravity Agent")
+                onModelSelect("antigravity-agent", "Antigravity Agent")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "🎭 Claude Code CLI Agent",
-            subtitle = "Anthropic Claude Code Stream-JSON Agent in ~/projects",
-            badge = "CLAUDE CLI",
-            badgeColor = Color(0xFFA78BFA),
+            title = "Claude Code CLI",
+            subtitle = "Stream-JSON coding agent in ~/projects",
+            badge = "CLI",
+            badgeColor = themeColors.textSecondary,
             onClick = {
-                onModelSelect("claude-code-cli", "🎭 Claude Code Agent")
+                onModelSelect("claude-code-cli", "Claude Code Agent")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "🌐 OpenCode Multi-Provider Agent (:2240)",
-            subtitle = "Isolated OpenCode Server (:2240) • Ollama, DeepSeek & Local",
-            badge = "PORT 2240",
-            badgeColor = Color(0xFF10B981),
+            title = "OpenCode Agent (:2240)",
+            subtitle = "Multi-provider local server (:2240)",
+            badge = ":2240",
+            badgeColor = themeColors.statusEmerald,
             onClick = {
-                onModelSelect("opencode-router", "🌐 OpenCode (:2240)")
+                onModelSelect("opencode-router", "OpenCode (:2240)")
                 onDismissRequest()
             }
         )
 
         ModelMenuItem(
-            title = "🧩 OpenAI Codex CLI Agent",
-            subtitle = "Terminal Autonomous Coding Agent in ~/projects",
-            badge = "CODEX CLI",
-            badgeColor = Color(0xFFF59E0B),
+            title = "OpenAI Codex CLI",
+            subtitle = "Terminal autonomous coding agent in ~/projects",
+            badge = "CLI",
+            badgeColor = themeColors.statusAmber,
             onClick = {
-                onModelSelect("codex-cli-agent", "🧩 Codex CLI Agent")
+                onModelSelect("codex-cli-agent", "Codex CLI Agent")
                 onDismissRequest()
             }
         )
@@ -430,6 +421,9 @@ fun formatCompactModelTitle(rawDisplayName: String): String {
         .replace("☁️ Antigravity • ", "")
         .replace("⚡ Google AI Studio • ", "")
         .replace("🌵 Cactus • ", "")
+        .replace("Antigravity • ", "")
+        .replace("Google AI Studio • ", "")
+        .replace("Cactus • ", "")
         .replace("☁️ ", "")
         .replace("⚡ ", "")
         .replace("🌵 ", "")
@@ -456,23 +450,24 @@ fun resolveActiveModelQuotaPercent(
 fun formatAntigravityTierBadge(rawTier: String): String {
     val t = rawTier.trim().lowercase()
     return when {
-        t.contains("ultra") -> "AI ULTRA"
-        t.contains("pro") -> "AI PRO"
-        t.contains("plus") -> "AI PLUS"
-        t.contains("enterprise") || t.contains("standard") -> "ENTERPRISE"
-        t.isBlank() || t.contains("free") -> "FREE TIER"
-        else -> rawTier.uppercase()
+        t.contains("ultra") -> "Ultra"
+        t.contains("pro") -> "Pro"
+        t.contains("plus") -> "Plus"
+        t.contains("enterprise") || t.contains("standard") -> "Enterprise"
+        t.isBlank() || t.contains("free") -> "Free"
+        else -> rawTier
     }
 }
 
 @Composable
 private fun ModelDropdownSectionHeader(title: String) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     Text(
         text = title,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        color = Color(0xFF64748B),
-        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = themeColors.textMuted,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
     )
 }
 
@@ -484,6 +479,7 @@ private fun ModelMenuItem(
     badgeColor: Color,
     onClick: () -> Unit
 ) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     DropdownMenuItem(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -494,23 +490,24 @@ private fun ModelMenuItem(
                 ) {
                     Text(
                         text = title,
-                        color = Color.White,
+                        color = themeColors.textPrimary,
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .weight(1f)
-                            .padding(end = 6.dp)
+                            .padding(end = 8.dp)
                     )
                     Surface(
                         shape = RoundedCornerShape(4.dp),
-                        color = badgeColor.copy(alpha = 0.18f)
+                        color = badgeColor.copy(alpha = 0.14f)
                     ) {
                         Text(
                             text = badge,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                             color = badgeColor,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
@@ -519,8 +516,8 @@ private fun ModelMenuItem(
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = subtitle,
-                    fontSize = 10.sp,
-                    color = Color(0xFF94A3B8)
+                    fontSize = 11.sp,
+                    color = themeColors.textSecondary
                 )
             }
         },

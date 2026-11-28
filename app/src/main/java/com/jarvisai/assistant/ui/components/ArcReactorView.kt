@@ -371,15 +371,16 @@ fun JarvisAIOrb(
         label = "liquidPhase"
     )
 
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     val (corePrimary, coreSecondary, outerAccent) = when {
-        activeHudMode == ProceduralHudMode.RED_ALERT -> Triple(AlertCrimson, StatusAmber, AccentRosePink)
-        activeHudMode == ProceduralHudMode.SENTRY_MATRIX -> Triple(AccentMintEmerald, AccentSkyCyan, RoyalPurplePrimary)
-        activeHudMode == ProceduralHudMode.CYBER_TERMINAL -> Triple(AccentSkyCyan, AccentMintEmerald, RoyalIndigoAccent)
-        activeHudMode == ProceduralHudMode.CHRONOS_GUARDIAN -> Triple(AccentChampagneGold, RoyalPurplePrimary, AccentSkyCyan)
-        status == AssistantStatus.IDLE -> Triple(RoyalPurplePrimary, AccentSkyCyan, AccentRosePink)
-        status == AssistantStatus.LISTENING -> Triple(RoyalPurplePrimary, StatusEmerald, AccentSkyCyan)
-        status == AssistantStatus.THINKING -> Triple(ElectricOrchid, AccentRosePink, StatusAmber)
-        else -> Triple(RoyalPurplePrimary, AccentSkyCyan, SoftLavenderGlow)
+        activeHudMode == ProceduralHudMode.RED_ALERT -> Triple(AlertCrimson, StatusAmber, AlertCrimson)
+        activeHudMode == ProceduralHudMode.SENTRY_MATRIX -> Triple(AccentMintEmerald, themeColors.accent, themeColors.primary)
+        activeHudMode == ProceduralHudMode.CYBER_TERMINAL -> Triple(themeColors.accent, AccentMintEmerald, themeColors.primary)
+        activeHudMode == ProceduralHudMode.CHRONOS_GUARDIAN -> Triple(AccentChampagneGold, themeColors.accent, themeColors.primary)
+        status == AssistantStatus.IDLE -> Triple(themeColors.accent, themeColors.secondary, themeColors.primary)
+        status == AssistantStatus.LISTENING -> Triple(themeColors.statusEmerald, themeColors.accent, themeColors.statusEmerald)
+        status == AssistantStatus.THINKING -> Triple(themeColors.statusAmber, themeColors.accent, themeColors.statusAmber)
+        else -> Triple(themeColors.accent, themeColors.primary, themeColors.secondary)
     }
 
     val dynamicBoost = (audioLevel.coerceIn(0f, 1f) * 0.24f)
@@ -649,29 +650,29 @@ fun QuantumPulseCore(
             val center = Offset(this.size.width / 2f, this.size.height / 2f)
             val baseRadius = (this.size.width / 2f) * 0.72f * effectiveScale
 
-            // 1. Outer Ambient Glow Halo
+            // 1. Subtle State Halo (restrained saturation and radius)
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        primaryHalo.copy(alpha = if (themeColors.isDark) 0.32f else 0.18f),
-                        secondaryHalo.copy(alpha = if (themeColors.isDark) 0.14f else 0.08f),
+                        primaryHalo.copy(alpha = if (themeColors.isDark) 0.14f else 0.08f),
+                        secondaryHalo.copy(alpha = if (themeColors.isDark) 0.05f else 0.03f),
                         Color.Transparent
                     ),
                     center = center,
-                    radius = baseRadius * 1.35f
+                    radius = baseRadius * 1.18f
                 ),
-                radius = baseRadius * 1.35f,
+                radius = baseRadius * 1.18f,
                 center = center
             )
 
-            // 2. Expanding Concentric Sound Wave Halo
-            val waveRadius = baseRadius * (0.85f + 0.35f * wavePhase)
-            val waveAlpha = (1f - wavePhase) * (if (themeColors.isDark) 0.40f else 0.25f)
+            // 2. Gentle Expanding Sound Wave Ring
+            val waveRadius = baseRadius * (0.88f + 0.22f * wavePhase)
+            val waveAlpha = (1f - wavePhase) * (if (themeColors.isDark) 0.20f else 0.12f)
             drawCircle(
                 color = primaryHalo.copy(alpha = waveAlpha),
                 radius = waveRadius,
                 center = center,
-                style = Stroke(width = 1.4.dp.toPx())
+                style = Stroke(width = 1.dp.toPx())
             )
 
             // 3. Middle Refraction Ring with Specular Edge

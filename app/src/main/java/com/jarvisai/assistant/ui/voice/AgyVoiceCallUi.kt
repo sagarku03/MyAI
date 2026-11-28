@@ -209,20 +209,22 @@ private fun CallContent(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(rgb(voice.deep).copy(alpha = 1f), Ink, Ink)))
+            .background(Ink)
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            drawCircle(
-                Brush.radialGradient(
-                    listOf(rgb(voice.core).copy(alpha = 0.22f), Color.Transparent),
-                    center = Offset(size.width / 2, size.height * 0.38f),
-                    radius = size.width * 0.9f
-                ),
-                radius = size.width * 0.9f,
-                center = Offset(size.width / 2, size.height * 0.38f)
-            )
+        if (st.phase == Phase.LIVE && !st.muted) {
+            Canvas(Modifier.fillMaxSize()) {
+                drawCircle(
+                    Brush.radialGradient(
+                        listOf(rgb(voice.core).copy(alpha = 0.14f), Color.Transparent),
+                        center = Offset(size.width / 2, size.height * 0.38f),
+                        radius = size.width * 0.80f
+                    ),
+                    radius = size.width * 0.80f,
+                    center = Offset(size.width / 2, size.height * 0.38f)
+                )
+            }
         }
-        Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 18.dp, vertical = 10.dp)) {
+        Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { if (st.phase == Phase.FAILED) AgyVoiceCall.end() else AgyVoiceCall.setMinimized(true) }) {
                     Icon(

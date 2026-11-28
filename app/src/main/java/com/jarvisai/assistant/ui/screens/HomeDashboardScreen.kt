@@ -168,10 +168,10 @@ fun HomeDashboardScreen(
     }
 
     val assistantHinglishGreeting = when (status) {
-        AssistantStatus.IDLE -> "Namaste! Main ${settings.assistantName.ifBlank { "Agentra" }} hoon. Sabhi neural subsystems online hain."
-        AssistantStatus.LISTENING -> "Ji, main sun raha hoon. Aap boliye..."
-        AssistantStatus.THINKING -> "Ek second, main aapki request aur memories process kar raha hoon..."
-        AssistantStatus.SPEAKING -> "Transmitting response..."
+        AssistantStatus.IDLE -> "Ready for commands, terminal tasks, or voice control."
+        AssistantStatus.LISTENING -> "Listening..."
+        AssistantStatus.THINKING -> "Processing request and context..."
+        AssistantStatus.SPEAKING -> "Responding..."
     }
 
     LazyColumn(
@@ -179,32 +179,29 @@ fun HomeDashboardScreen(
             .fillMaxSize()
             .testTag("home_dashboard_list"),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 48.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // ====================================================================
-        // ZONE 1: DYNAMIC STATUS ISLAND (Top Spatial Bar)
+        // ZONE 1: WORKSTATION STATUS BAR
         // ====================================================================
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Dynamic Island Pill
                     Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(themeColors.surface.copy(alpha = if (themeColors.isDark) 0.88f else 0.94f))
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(themeColors.surface)
                             .border(
-                                width = 1.2.dp,
-                                brush = Brush.horizontalGradient(
-                                    listOf(themeColors.glassRimTop, themeColors.borderHighlight, themeColors.glassRimBottom)
-                                ),
-                                shape = RoundedCornerShape(999.dp)
+                                width = 1.dp,
+                                color = themeColors.border,
+                                shape = RoundedCornerShape(10.dp)
                             )
                             .clickable(onClick = onNavigateToApiSettings)
-                            .padding(horizontal = 14.dp, vertical = 7.dp)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
                             .testTag("home_dynamic_island"),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -215,57 +212,54 @@ fun HomeDashboardScreen(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .size(24.dp)
-                                .clip(RoundedCornerShape(7.dp))
+                                .clip(RoundedCornerShape(6.dp))
                         )
                         Box(
                             modifier = Modifier
-                                .size(9.dp)
+                                .size(8.dp)
                                 .clip(CircleShape)
                                 .background(if (hasApiKey) themeColors.statusEmerald else themeColors.statusAmber)
                         )
                         Text(
-                            text = "${settings.assistantName.ifBlank { "Agentra" }.uppercase()} OS",
-                            style = MaterialTheme.typography.labelMedium,
+                            text = settings.assistantName.ifBlank { "Agentra" },
+                            style = MaterialTheme.typography.labelLarge,
                             color = themeColors.textPrimary,
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 0.8.sp
+                            fontWeight = FontWeight.SemiBold
                         )
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(statusDotColor.copy(alpha = 0.20f))
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(statusDotColor.copy(alpha = 0.14f))
                                 .padding(horizontal = 8.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = status.label.uppercase(),
+                                text = status.label,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = statusDotColor,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 9.5.sp
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
 
-                    // Right Actions: Wake Word Pill, Notifications Bell, Settings Cog
+                    // Right Actions: Wake Word Toggle, Notifications, Settings
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Wake Word Compact Pill
                         Row(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(10.dp))
                                 .background(
-                                    if (isWakeWordActive) themeColors.statusEmerald.copy(alpha = 0.18f)
-                                    else themeColors.surface.copy(alpha = 0.70f)
+                                    if (isWakeWordActive) themeColors.statusEmerald.copy(alpha = 0.14f)
+                                    else themeColors.surface
                                 )
                                 .border(
                                     1.dp,
-                                    if (isWakeWordActive) themeColors.statusEmerald.copy(alpha = 0.65f)
+                                    if (isWakeWordActive) themeColors.statusEmerald.copy(alpha = 0.50f)
                                     else themeColors.border,
-                                    RoundedCornerShape(16.dp)
+                                    RoundedCornerShape(10.dp)
                                 )
-                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
@@ -273,14 +267,13 @@ fun HomeDashboardScreen(
                                 imageVector = Icons.Default.GraphicEq,
                                 contentDescription = null,
                                 tint = if (isWakeWordActive) themeColors.statusEmerald else themeColors.textSecondary,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                             Text(
                                 text = "Wake",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = themeColors.textPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp
+                                fontWeight = FontWeight.Medium
                             )
                             Switch(
                                 checked = isWakeWordActive,
@@ -292,18 +285,17 @@ fun HomeDashboardScreen(
                                     uncheckedTrackColor = themeColors.surfaceElevated
                                 ),
                                 modifier = Modifier
-                                    .size(width = 38.dp, height = 24.dp)
+                                    .size(width = 40.dp, height = 24.dp)
                                     .testTag("home_wake_word_switch")
                             )
                         }
 
-                        // Notifications Icon
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(themeColors.surface.copy(alpha = 0.85f))
-                                .border(1.dp, themeColors.border, RoundedCornerShape(13.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(themeColors.surface)
+                                .border(1.dp, themeColors.border, RoundedCornerShape(8.dp))
                                 .clickable(onClick = onNavigateToNotifications)
                                 .testTag("home_btn_notifications"),
                             contentAlignment = Alignment.Center
@@ -312,17 +304,16 @@ fun HomeDashboardScreen(
                                 imageVector = Icons.Default.Notifications,
                                 contentDescription = "Notifications",
                                 tint = themeColors.textPrimary,
-                                modifier = Modifier.size(19.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
 
-                        // Settings Icon
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(themeColors.surface.copy(alpha = 0.85f))
-                                .border(1.dp, themeColors.border, RoundedCornerShape(13.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(themeColors.surface)
+                                .border(1.dp, themeColors.border, RoundedCornerShape(8.dp))
                                 .clickable(onClick = onNavigateToGeneralSettings)
                                 .testTag("home_btn_general_settings"),
                             contentAlignment = Alignment.Center
@@ -331,7 +322,7 @@ fun HomeDashboardScreen(
                                 imageVector = Icons.Default.Settings,
                                 contentDescription = "Settings",
                                 tint = themeColors.textPrimary,
-                                modifier = Modifier.size(19.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -339,24 +330,14 @@ fun HomeDashboardScreen(
             }
         }
 
-        // ====================================================================
-        // OPTIONAL MISSING API KEY BANNER (Clean Luxury Amber Tone)
-        // ====================================================================
         if (!hasApiKey) {
             item {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(
-                            Brush.horizontalGradient(
-                                listOf(
-                                    themeColors.statusAmber.copy(alpha = 0.18f),
-                                    themeColors.surfaceElevated.copy(alpha = 0.90f)
-                                )
-                            )
-                        )
-                        .border(1.2.dp, themeColors.statusAmber.copy(alpha = 0.65f), RoundedCornerShape(22.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(themeColors.surfaceElevated)
+                        .border(1.dp, themeColors.statusAmber.copy(alpha = 0.50f), RoundedCornerShape(12.dp))
                         .clickable(onClick = onNavigateToGeneralSettings)
                         .padding(16.dp)
                         .testTag("missing_api_key_banner")
@@ -373,46 +354,46 @@ fun HomeDashboardScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(42.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(themeColors.statusAmber.copy(alpha = 0.25f)),
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(themeColors.statusAmber.copy(alpha = 0.16f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Key,
                                     contentDescription = null,
                                     tint = themeColors.statusAmber,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                             Column {
                                 Text(
-                                    text = "Activate Gemini Cloud Brain",
-                                    style = MaterialTheme.typography.titleMedium,
+                                    text = "Configure Gemini API Key",
+                                    style = MaterialTheme.typography.titleSmall,
                                     color = themeColors.textPrimary,
-                                    fontWeight = FontWeight.ExtraBold
+                                    fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "Add your API key in Settings to unlock Voice & Agentic AI",
+                                    text = "Add a key in Settings to enable cloud voice and agent tasks",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = themeColors.textSecondary,
-                                    fontWeight = FontWeight.Medium
+                                    fontWeight = FontWeight.Normal
                                 )
                             }
                         }
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(themeColors.accent)
                                 .clickable(onClick = onNavigateToApiSettings)
-                                .padding(horizontal = 14.dp, vertical = 7.dp)
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
                                 .testTag("home_btn_api_settings")
                         ) {
                             Text(
                                 text = "Setup",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
@@ -453,34 +434,32 @@ fun HomeDashboardScreen(
                         val selected = activeHudMode == mode
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
+                                .clip(RoundedCornerShape(6.dp))
                                 .background(
-                                    if (selected) themeColors.accent.copy(alpha = 0.24f)
-                                    else themeColors.surface.copy(alpha = 0.72f)
+                                    if (selected) themeColors.accent.copy(alpha = 0.16f)
+                                    else themeColors.surface
                                 )
                                 .border(
                                     width = 1.dp,
                                     color = if (selected) themeColors.accent else themeColors.border,
-                                    shape = RoundedCornerShape(999.dp)
+                                    shape = RoundedCornerShape(6.dp)
                                 )
                                 .clickable {
                                     com.jarvisai.assistant.ui.components.ProceduralHudModeState.setMode(mode)
                                 }
-                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
                                 .testTag("hud_mode_${mode.name.lowercase()}")
                         ) {
                             Text(
                                 text = mode.hudBadge,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (selected) themeColors.accent else themeColors.textSecondary,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 9.5.sp
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
                 }
 
-                // Editorial Status & Bilingual Hinglish Greeting
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -488,47 +467,47 @@ fun HomeDashboardScreen(
                     Text(
                         text = "${status.hudCode} // ${activeHudMode.hudBadge}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = statusDotColor,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.2.sp
+                        color = themeColors.textMuted,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium
                     )
                     Text(
                         text = assistantHinglishGreeting,
                         style = MaterialTheme.typography.bodyMedium,
                         color = themeColors.textSecondary,
                         textAlign = TextAlign.Center,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = FontWeight.Normal,
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
                 }
 
-                // Omni-Command Search Bar
+                // Omni-Command Input
                 OutlinedTextField(
                     value = quickCommandText,
                     onValueChange = { quickCommandText = it },
                     placeholder = {
                         Text(
-                            text = "Ask Agentra or type any command...",
+                            text = "Run a command or task...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = themeColors.textMuted
                         )
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = themeColors.textPrimary,
                         unfocusedTextColor = themeColors.textPrimary,
-                        focusedContainerColor = themeColors.surface.copy(alpha = 0.90f),
-                        unfocusedContainerColor = themeColors.surface.copy(alpha = 0.75f),
+                        focusedContainerColor = themeColors.surfaceElevated,
+                        unfocusedContainerColor = themeColors.surface,
                         focusedBorderColor = themeColors.accent,
                         unfocusedBorderColor = themeColors.border,
                         cursorColor = themeColors.accent
                     ),
                     leadingIcon = {
                         Icon(
-                            imageVector = Icons.Default.AutoAwesome,
+                            imageVector = Icons.Default.Terminal,
                             contentDescription = null,
-                            tint = themeColors.accent,
+                            tint = themeColors.textSecondary,
                             modifier = Modifier.size(20.dp)
                         )
                     },
@@ -538,11 +517,10 @@ fun HomeDashboardScreen(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             modifier = Modifier.padding(end = 6.dp)
                         ) {
-                            // Mic Button
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .clip(CircleShape)
+                                    .clip(RoundedCornerShape(8.dp))
                                     .background(themeColors.surfaceElevated)
                                     .clickable { onNavigateToVoice() }
                                     .testTag("home_mic_btn"),
@@ -556,11 +534,10 @@ fun HomeDashboardScreen(
                                 )
                             }
 
-                            // Send Button
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .clip(CircleShape)
+                                    .clip(RoundedCornerShape(8.dp))
                                     .background(themeColors.accent)
                                     .clickable {
                                         if (quickCommandText.isNotBlank()) {
@@ -600,27 +577,17 @@ fun HomeDashboardScreen(
                         .testTag("home_quick_command_input")
                 )
 
-                // 2 Large Ergonomic Quick Dispatch Hero Buttons (56dp height)
+                // Primary Actions: Live Voice + Text Studio
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Button 1: Start Live Call (Filled Theme Accent Gradient)
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .height(56.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(
-                                Brush.horizontalGradient(
-                                    listOf(themeColors.accent, themeColors.primary)
-                                )
-                            )
-                            .border(
-                                width = 1.2.dp,
-                                color = Color.White.copy(alpha = 0.50f),
-                                shape = RoundedCornerShape(20.dp)
-                            )
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(themeColors.accent)
                             .clickable(onClick = onNavigateToVoice)
                             .padding(horizontal = 12.dp)
                             .testTag("hero_btn_start_voice")
@@ -631,48 +598,38 @@ fun HomeDashboardScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.22f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Mic,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
                             Column {
                                 Text(
-                                    text = "Start Live Call",
+                                    text = "Live Voice",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = Color.White,
-                                    fontWeight = FontWeight.Black
+                                    fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "FaceTime AI Companion",
+                                    text = "Hands-free stream",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    fontSize = 10.5.sp
+                                    color = Color.White.copy(alpha = 0.85f)
                                 )
                             }
                         }
                     }
 
-                    // Button 2: AI Text Studio (Satin Translucent Surface)
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .height(56.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(themeColors.surface.copy(alpha = 0.92f))
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(themeColors.surface)
                             .border(
-                                width = 1.2.dp,
+                                width = 1.dp,
                                 color = themeColors.border,
-                                shape = RoundedCornerShape(20.dp)
+                                shape = RoundedCornerShape(12.dp)
                             )
                             .clickable(onClick = onNavigateToChat)
                             .padding(horizontal = 12.dp)
@@ -684,65 +641,56 @@ fun HomeDashboardScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(CircleShape)
-                                    .background(themeColors.surfaceElevated),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Chat,
-                                    contentDescription = null,
-                                    tint = themeColors.accent,
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Chat,
+                                contentDescription = null,
+                                tint = themeColors.accent,
+                                modifier = Modifier.size(20.dp)
+                            )
                             Column {
                                 Text(
-                                    text = "AI Text Studio",
+                                    text = "Text Chat",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = themeColors.textPrimary,
-                                    fontWeight = FontWeight.Black
+                                    fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "Multimodal & Vision",
+                                    text = "Code, files & vision",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = themeColors.textSecondary,
-                                    fontSize = 10.5.sp
+                                    color = themeColors.textSecondary
                                 )
                             }
                         }
                     }
                 }
 
-                // Compact Status Simulation Mode Chips
+                // State Preview Chips
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     listOf(
-                        Triple(AssistantStatus.IDLE, "IDLE", themeColors.accent),
-                        Triple(AssistantStatus.LISTENING, "LISTEN", themeColors.statusEmerald),
-                        Triple(AssistantStatus.THINKING, "THINK", themeColors.statusAmber),
-                        Triple(AssistantStatus.SPEAKING, "SPEAK", themeColors.primary)
+                        Triple(AssistantStatus.IDLE, "Idle", themeColors.accent),
+                        Triple(AssistantStatus.LISTENING, "Listen", themeColors.statusEmerald),
+                        Triple(AssistantStatus.THINKING, "Think", themeColors.statusAmber),
+                        Triple(AssistantStatus.SPEAKING, "Speak", themeColors.primary)
                     ).forEach { (st, label, chipColor) ->
                         val selected = status == st
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(
-                                    if (selected) chipColor.copy(alpha = 0.22f)
-                                    else themeColors.surface.copy(alpha = 0.50f)
+                                    if (selected) chipColor.copy(alpha = 0.16f)
+                                    else themeColors.surface
                                 )
                                 .border(
                                     width = 1.dp,
                                     color = if (selected) chipColor else themeColors.border,
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(8.dp)
                                 )
                                 .clickable { onStatusPreviewSelect(st) }
-                                .padding(vertical = 6.dp)
+                                .padding(vertical = 8.dp)
                                 .testTag("status_chip_${st.name.lowercase()}"),
                             contentAlignment = Alignment.Center
                         ) {
@@ -750,8 +698,7 @@ fun HomeDashboardScreen(
                                 text = label,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (selected) chipColor else themeColors.textSecondary,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 10.sp
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
@@ -770,14 +717,12 @@ fun HomeDashboardScreen(
         // ZONE 3: CONTEXTUAL SMART GLANCE CARD & QUICK TILES
         // ====================================================================
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                // Section Title
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "NEURAL CAPABILITIES",
+                    text = "Capabilities",
                     style = MaterialTheme.typography.labelMedium,
                     color = themeColors.textMuted,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 1.sp,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 4.dp)
                 )
 
@@ -834,14 +779,14 @@ fun HomeDashboardScreen(
                     )
                 }
 
-                // 3 Cyber-Tactical Feature Tiles: Optical Solver, Polyglot Diplomat, Arc Reactor Telemetry
+                // Feature Tiles: Optical Solver, Polyglot Diplomat, Charging Telemetry
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     CockpitQuickTile(
                         title = "Optical Solver",
-                        subtitle = "🧮 Math, Code & Bill Split",
+                        subtitle = "Math, code & receipt math",
                         icon = Icons.Default.Calculate,
                         accentColor = themeColors.accent,
                         onClick = onNavigateToOpticalSolver,
@@ -850,8 +795,8 @@ fun HomeDashboardScreen(
                             .testTag("home_btn_optical_solver")
                     )
                     CockpitQuickTile(
-                        title = "Polyglot Diplomat",
-                        subtitle = "🌐 2-Way Live Translator",
+                        title = "Live Translator",
+                        subtitle = "Two-way voice translation",
                         icon = Icons.Default.Translate,
                         accentColor = themeColors.statusEmerald,
                         onClick = onNavigateToPolyglotDiplomat,
@@ -863,11 +808,11 @@ fun HomeDashboardScreen(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     CockpitQuickTile(
-                        title = "Arc Reactor Dock",
-                        subtitle = "🔋 Live Watts, mV & Thermal HUD",
+                        title = "Charging Telemetry",
+                        subtitle = "Live watts, mV & thermal stats",
                         icon = Icons.Default.BatteryChargingFull,
                         accentColor = themeColors.primary,
                         onClick = onNavigateToChargingTelemetry,
@@ -914,11 +859,11 @@ fun HomeDashboardScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(themeColors.surface.copy(alpha = 0.92f))
-                        .border(1.2.dp, themeColors.border, RoundedCornerShape(22.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(themeColors.cardSurface)
+                        .border(1.dp, themeColors.cardBorder, RoundedCornerShape(12.dp))
                         .clickable { showFullAgenticTools = !showFullAgenticTools }
-                        .padding(14.dp)
+                        .padding(16.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -927,56 +872,55 @@ fun HomeDashboardScreen(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(themeColors.primary.copy(alpha = 0.20f)),
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(themeColors.surfaceElevated)
+                                    .border(1.dp, themeColors.border, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Terminal,
                                     contentDescription = null,
-                                    tint = themeColors.primary,
-                                    modifier = Modifier.size(20.dp)
+                                    tint = themeColors.accent,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                             Column {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Text(
-                                        text = "10 Autonomous CUA Engines",
+                                        text = "Autonomous Screen Engines",
                                         style = MaterialTheme.typography.titleSmall,
                                         color = themeColors.textPrimary,
-                                        fontWeight = FontWeight.ExtraBold
+                                        fontWeight = FontWeight.SemiBold
                                     )
                                     Box(
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(999.dp))
+                                            .clip(RoundedCornerShape(6.dp))
                                             .background(
-                                                if (isAgenticLoopRunning) themeColors.statusEmerald.copy(alpha = 0.22f)
+                                                if (isAgenticLoopRunning) themeColors.statusEmerald.copy(alpha = 0.16f)
                                                 else themeColors.surfaceElevated
                                             )
-                                            .padding(horizontal = 7.dp, vertical = 2.dp)
+                                            .padding(horizontal = 8.dp, vertical = 2.dp)
                                     ) {
                                         Text(
-                                            text = if (isAgenticLoopRunning) "RUNNING" else "STANDBY",
+                                            text = if (isAgenticLoopRunning) "Running" else "Standby",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = if (isAgenticLoopRunning) themeColors.statusEmerald else themeColors.textMuted,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 9.sp
+                                            fontWeight = FontWeight.Medium
                                         )
                                     }
                                 }
                                 Text(
-                                    text = "Set-of-Mark Vision • Form Auto-Fill • Cross-App Bridge",
+                                    text = "Set-of-Mark vision, form auto-fill & cross-app bridge",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = themeColors.textSecondary,
-                                    fontSize = 11.5.sp
+                                    color = themeColors.textSecondary
                                 )
                             }
                         }
@@ -1042,47 +986,43 @@ private fun CockpitQuickTile(
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(themeColors.surface.copy(alpha = 0.90f))
+            .clip(RoundedCornerShape(12.dp))
+            .background(themeColors.cardSurface)
             .border(
-                width = 1.2.dp,
-                brush = Brush.linearGradient(
-                    listOf(themeColors.glassRimTop, accentColor.copy(alpha = 0.45f), themeColors.glassRimBottom)
-                ),
-                shape = RoundedCornerShape(20.dp)
+                width = 1.dp,
+                color = themeColors.cardBorder,
+                shape = RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onClick)
-            .padding(14.dp)
+            .padding(16.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(
                 modifier = Modifier
-                    .size(38.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(accentColor.copy(alpha = 0.18f))
-                    .border(1.dp, accentColor.copy(alpha = 0.40f), RoundedCornerShape(12.dp)),
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(themeColors.surfaceElevated)
+                    .border(1.dp, themeColors.border, RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = title,
                     tint = accentColor,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
             Column {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     color = themeColors.textPrimary,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 15.sp
+                    fontWeight = FontWeight.SemiBold
                 )
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = themeColors.textSecondary,
-                    fontSize = 11.5.sp
+                    color = themeColors.textSecondary
                 )
             }
         }
@@ -1100,13 +1040,13 @@ private fun CockpitPillAction(
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(themeColors.surface.copy(alpha = 0.85f))
-            .border(1.dp, themeColors.border, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(8.dp))
+            .background(themeColors.surface)
+            .border(1.dp, themeColors.border, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Icon(
             imageVector = icon,
@@ -1118,7 +1058,7 @@ private fun CockpitPillAction(
             text = label,
             style = MaterialTheme.typography.labelMedium,
             color = themeColors.textPrimary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Medium
         )
     }
 }

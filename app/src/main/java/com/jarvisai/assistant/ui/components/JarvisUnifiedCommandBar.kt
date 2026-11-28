@@ -155,11 +155,12 @@ fun JarvisUnifiedCommandBar(
     val activeQuotaPercent = remember(activeModelId, antigravityModels) {
         resolveActiveModelQuotaPercent(activeModelId, antigravityModels)
     }
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     val quotaColor = when {
-        activeQuotaPercent == null -> Color(0xFF10B981)
-        activeQuotaPercent <= 15 -> Color(0xFFEF4444)
-        activeQuotaPercent <= 40 -> Color(0xFFF59E0B)
-        else -> Color(0xFF22C55E)
+        activeQuotaPercent == null -> themeColors.statusEmerald
+        activeQuotaPercent <= 15 -> themeColors.statusRoseRed
+        activeQuotaPercent <= 40 -> themeColors.statusAmber
+        else -> themeColors.statusEmerald
     }
 
     val composerTargetName = remember(compactModelLabel, activeModelId) {
@@ -178,16 +179,17 @@ fun JarvisUnifiedCommandBar(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("jarvis_unified_command_bar"),
-        shape = RoundedCornerShape(26.dp),
-        color = Color(0xFF14171E),
+        shape = RoundedCornerShape(12.dp),
+        color = themeColors.surface,
         border = BorderStroke(
             width = 1.dp,
             color = when {
-                isDictating -> Color(0xFF00E5FF).copy(alpha = (micPulseAlpha * 0.85f).coerceIn(0.4f, 0.9f))
-                isLiveVoiceActive -> Color(0xFF00E5FF).copy(alpha = 0.65f)
-                else -> Color(0xFF232834)
+                isDictating -> themeColors.accent.copy(alpha = (micPulseAlpha * 0.85f).coerceIn(0.4f, 0.9f))
+                isLiveVoiceActive -> themeColors.accent.copy(alpha = 0.65f)
+                promptText.isNotEmpty() -> themeColors.borderHighlight
+                else -> themeColors.border
             }
         ),
         tonalElevation = 0.dp
@@ -195,30 +197,31 @@ fun JarvisUnifiedCommandBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 10.dp)
+                .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp)
         ) {
             // Row 1: Clean Auto-Expanding Prompt Field
             OutlinedTextField(
                 value = promptText,
                 onValueChange = onPromptChange,
                 textStyle = TextStyle(
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium
+                    color = themeColors.textPrimary,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.Normal
                 ),
                 placeholder = {
                     Text(
                         text = when {
                             isDictating -> "Listening... speak in any language"
-                            isLiveVoiceActive -> if (isMicMuted) "Live Voice Muted • Type or unmute..." else "Listening to speech... (▁▂▄▆▄▂▁)"
-                            else -> "Reply to $composerTargetName..."
+                            isLiveVoiceActive -> if (isMicMuted) "Voice muted • type or unmute" else "Listening..."
+                            else -> "Message $composerTargetName..."
                         },
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Normal,
                         color = if (isDictating || isLiveVoiceActive) {
-                            Color(0xFF00E5FF).copy(alpha = 0.85f)
+                            themeColors.accent
                         } else {
-                            Color(0xFF8B949E)
+                            themeColors.textMuted
                         }
                     )
                 },
@@ -229,17 +232,17 @@ fun JarvisUnifiedCommandBar(
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.Transparent,
                     unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
+                    focusedTextColor = themeColors.textPrimary,
+                    unfocusedTextColor = themeColors.textPrimary,
                     focusedContainerColor = Color.Transparent,
                     unfocusedContainerColor = Color.Transparent,
-                    cursorColor = Color(0xFF60A5FA)
+                    cursorColor = themeColors.accent
                 )
             )
 
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
-            // Row 2: [+] [✦ Model (Thinking) 100% ▾]   [🎧] [⫼ Dictate] [🎙️ / ➤ / ■]
+            // Row 2: [+] [Model (Thinking) 100%]   [Headset] [Dictate] [Mic / Send / Stop]
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
                 Row(
                     modifier = Modifier
@@ -254,9 +257,9 @@ fun JarvisUnifiedCommandBar(
                     ) {
                         Surface(
                             onClick = onToolsClick,
-                            shape = CircleShape,
-                            color = Color(0xFF1D212A),
-                            border = BorderStroke(1.dp, Color(0xFF2B313E)),
+                            shape = RoundedCornerShape(8.dp),
+                            color = themeColors.surfaceElevated,
+                            border = BorderStroke(1.dp, themeColors.border),
                             modifier = Modifier
                                 .size(36.dp)
                                 .testTag("command_bar_tools_button")
@@ -265,65 +268,58 @@ fun JarvisUnifiedCommandBar(
                                 Icon(
                                     imageVector = Icons.Default.Add,
                                     contentDescription = "Attach photos, videos, or files",
-                                    tint = Color(0xFFD1D5DB),
-                                    modifier = Modifier.size(19.dp)
+                                    tint = themeColors.textSecondary,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         Box(modifier = Modifier.weight(1f, fill = false)) {
                             Surface(
                                 onClick = { showModelMenu = true },
-                                shape = RoundedCornerShape(20.dp),
-                                color = Color(0xFF1A1E27),
-                                border = BorderStroke(1.dp, Color(0xFF282E3B)),
+                                shape = RoundedCornerShape(8.dp),
+                                color = themeColors.surfaceElevated,
+                                border = BorderStroke(1.dp, themeColors.border),
                                 modifier = Modifier.testTag("topbar_model_selector_pill")
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.AutoAwesome,
-                                        contentDescription = null,
-                                        tint = Color(0xFF60A5FA),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(5.dp))
                                     Text(
                                         text = modelPillText,
-                                        color = Color.White,
+                                        color = themeColors.textPrimary,
                                         fontFamily = FontFamily.SansSerif,
-                                        fontSize = 12.5.sp,
-                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false)
                                     )
                                     if (activeQuotaPercent != null) {
-                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Surface(
-                                            shape = RoundedCornerShape(6.dp),
-                                            color = quotaColor.copy(alpha = 0.22f)
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = quotaColor.copy(alpha = 0.14f)
                                         ) {
                                             Text(
                                                 text = "$activeQuotaPercent%",
                                                 color = quotaColor,
-                                                fontFamily = FontFamily.SansSerif,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                                             )
                                         }
                                     }
-                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Icon(
                                         imageVector = Icons.Default.KeyboardArrowDown,
                                         contentDescription = "Select Model",
-                                        tint = Color(0xFF9CA3AF),
-                                        modifier = Modifier.size(15.dp)
+                                        tint = themeColors.textMuted,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
@@ -346,10 +342,10 @@ fun JarvisUnifiedCommandBar(
                         }
                     }
 
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
 
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val useAgyVoiceCall = isAntigravityActive && onAgyVoiceCallClick != null
@@ -361,15 +357,15 @@ fun JarvisUnifiedCommandBar(
                                     onVoiceStudioClick()
                                 }
                             },
-                            shape = CircleShape,
+                            shape = RoundedCornerShape(8.dp),
                             color = if (useAgyVoiceCall && isAgyVoiceCallActive) {
-                                Color(0xFF1D4ED8).copy(alpha = 0.25f)
+                                themeColors.accent.copy(alpha = 0.16f)
                             } else {
-                                Color(0xFF1D212A)
+                                themeColors.surfaceElevated
                             },
                             border = BorderStroke(
                                 1.dp,
-                                if (useAgyVoiceCall && isAgyVoiceCallActive) Color(0xFF3B82F6) else Color(0xFF2B313E)
+                                if (useAgyVoiceCall && isAgyVoiceCallActive) themeColors.accent else themeColors.border
                             ),
                             modifier = Modifier
                                 .size(36.dp)
@@ -383,23 +379,23 @@ fun JarvisUnifiedCommandBar(
                                         useAgyVoiceCall -> "Start Antigravity voice call"
                                         else -> "Open Live Voice Studio"
                                     },
-                                    tint = if (useAgyVoiceCall && isAgyVoiceCallActive) Color(0xFF60A5FA) else Color(0xFFD1D5DB),
-                                    modifier = Modifier.size(17.dp)
+                                    tint = if (useAgyVoiceCall && isAgyVoiceCallActive) themeColors.accent else themeColors.textSecondary,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
 
                         Surface(
                             onClick = onDictateToggleClick,
-                            shape = CircleShape,
+                            shape = RoundedCornerShape(8.dp),
                             color = if (isDictating) {
-                                Color(0xFF00E5FF).copy(alpha = (micPulseAlpha * 0.25f + dynamicWaveBoost).coerceAtMost(0.65f))
+                                themeColors.accent.copy(alpha = (micPulseAlpha * 0.22f + dynamicWaveBoost).coerceAtMost(0.55f))
                             } else {
-                                Color(0xFF1D212A)
+                                themeColors.surfaceElevated
                             },
                             border = BorderStroke(
                                 1.dp,
-                                if (isDictating) Color(0xFF00E5FF) else Color(0xFF2B313E)
+                                if (isDictating) themeColors.accent else themeColors.border
                             ),
                             modifier = Modifier
                                 .size(36.dp)
@@ -409,8 +405,8 @@ fun JarvisUnifiedCommandBar(
                                 Icon(
                                     imageVector = if (isDictating) Icons.Default.Stop else Icons.Default.GraphicEq,
                                     contentDescription = if (isDictating) "Stop Voice Dictation" else "Start Voice Dictation into Text Box",
-                                    tint = if (isDictating) Color(0xFF00E5FF) else Color(0xFFD1D5DB),
-                                    modifier = Modifier.size(17.dp)
+                                    tint = if (isDictating) themeColors.accent else themeColors.textSecondary,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
@@ -419,8 +415,8 @@ fun JarvisUnifiedCommandBar(
                             isGenerating -> {
                                 Surface(
                                     onClick = onStopClick,
-                                    shape = CircleShape,
-                                    color = Color(0xFFEF4444),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = themeColors.statusRoseRed,
                                     modifier = Modifier
                                         .size(36.dp)
                                         .testTag("command_bar_stop_button")
@@ -438,8 +434,8 @@ fun JarvisUnifiedCommandBar(
                             canSend -> {
                                 Surface(
                                     onClick = onSendClick,
-                                    shape = CircleShape,
-                                    color = Color.White,
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = themeColors.accent,
                                     modifier = Modifier
                                         .size(36.dp)
                                         .testTag("command_bar_send_button")
@@ -448,8 +444,8 @@ fun JarvisUnifiedCommandBar(
                                         Icon(
                                             imageVector = Icons.AutoMirrored.Filled.Send,
                                             contentDescription = "Send Prompt",
-                                            tint = Color(0xFF0B0E14),
-                                            modifier = Modifier.size(17.dp)
+                                            tint = themeColors.onPrimary,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }
@@ -457,8 +453,8 @@ fun JarvisUnifiedCommandBar(
                             else -> {
                                 Surface(
                                     onClick = onMicClick,
-                                    shape = CircleShape,
-                                    color = if (isLiveVoiceActive) Color(0xFF00E5FF) else Color.White,
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isLiveVoiceActive) themeColors.statusRoseRed else themeColors.accent,
                                     modifier = Modifier
                                         .size(36.dp)
                                         .testTag("command_bar_mic_button")
@@ -467,7 +463,7 @@ fun JarvisUnifiedCommandBar(
                                         Icon(
                                             imageVector = if (isLiveVoiceActive) Icons.Default.Stop else Icons.Default.Mic,
                                             contentDescription = if (isLiveVoiceActive) "Stop Live Voice" else "Start Live Voice",
-                                            tint = Color(0xFF0B0E14),
+                                            tint = themeColors.onPrimary,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }

@@ -44,6 +44,7 @@ import com.example.ui.theme.AccentMintEmerald
 import com.example.ui.theme.AccentRosePink
 import com.example.ui.theme.AccentSkyCyan
 import com.example.ui.theme.AlertCrimson
+import com.example.ui.theme.JarvisTheme
 import com.example.ui.theme.RoyalPurplePrimary
 import com.example.ui.theme.TextLavenderMuted
 import com.jarvisai.assistant.model.ProceduralHudMode
@@ -104,30 +105,22 @@ fun AbuZarPrivateAgentCommandDeck(
     var ollamaModelInput by remember(ollamaConfig.modelName) { mutableStateOf(ollamaConfig.modelName) }
     var ollamaTestPrompt by remember { mutableStateOf("Agentra, report local system status in Hinglish") }
 
+    val themeColors = JarvisTheme.colors
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(26.dp))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFF0E172A).copy(alpha = 0.96f),
-                        Color(0xFF1E1B4B).copy(alpha = 0.96f)
-                    )
-                )
-            )
+            .clip(RoundedCornerShape(12.dp))
+            .background(themeColors.cardSurface)
             .border(
-                width = 1.3.dp,
-                brush = Brush.horizontalGradient(
-                    listOf(AccentSkyCyan, RoyalPurplePrimary, AccentMintEmerald)
-                ),
-                shape = RoundedCornerShape(26.dp)
+                width = 1.dp,
+                color = themeColors.border,
+                shape = RoundedCornerShape(12.dp)
             )
             .padding(16.dp)
             .testTag("abuzar_private_agent_command_deck"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // HEADER: PrivateAgent Fusion Status + Gyroscope 3D Telemetry
+        // HEADER: Private-Agent 3D & Sensor Suite
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -135,40 +128,41 @@ fun AbuZarPrivateAgentCommandDeck(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "🦾 PRIVATE-AGENT 3D & SENSOR SUITE",
+                    text = "3D & Sensor Suite",
                     style = MaterialTheme.typography.titleSmall,
-                    color = AccentSkyCyan,
-                    fontWeight = FontWeight.Black
+                    color = themeColors.textPrimary,
+                    fontWeight = FontWeight.SemiBold
                 )
                 Text(
                     text = "3D Bust Hologram • Air Gestures • ADS-B Radar • Sentry • SOUL.md",
                     style = MaterialTheme.typography.labelSmall,
-                    color = TextLavenderMuted,
-                    fontWeight = FontWeight.SemiBold
+                    color = themeColors.textSecondary,
+                    fontWeight = FontWeight.Normal
                 )
             }
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color.Black.copy(alpha = 0.45f))
-                    .border(1.dp, AccentMintEmerald.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(themeColors.surfacePill)
+                    .border(1.dp, themeColors.border, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(
                     text = String.format(
                         Locale.US,
-                        "3D GYRO %.0f°/%.0f°",
+                        "GYRO %.0f°/%.0f°",
                         gyro.pitchDeg,
                         gyro.rollDeg
                     ),
                     fontSize = 10.sp,
-                    color = AccentMintEmerald,
-                    fontWeight = FontWeight.ExtraBold
+                    fontFamily = FontFamily.Monospace,
+                    color = themeColors.statusEmerald,
+                    fontWeight = FontWeight.Medium
                 )
             }
         }
 
-        // 1. 3D HOLOGRAM HUD MODE SWITCHER (ARC CORE ↔ 3D IRON MAN BUST ↔ ADS-B RADAR ↔ SENTRY)
+        // 1. 3D HUD MODE SWITCHER
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -176,26 +170,26 @@ fun AbuZarPrivateAgentCommandDeck(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             val featuredModes = listOf(
-                ProceduralHudMode.ARC_DEFAULT to "⚛️ 3D Arc Core",
-                ProceduralHudMode.IRON_MAN_BUST_3D to "🦾 3D Iron Man Bust",
-                ProceduralHudMode.ADSB_AIRSPACE_RADAR to "✈️ ADS-B Radar",
-                ProceduralHudMode.SENTRY_MATRIX to "🛡️ Sentry Matrix",
-                ProceduralHudMode.GHOST_PILOT to "🎯 Ghost Pilot",
-                ProceduralHudMode.RED_ALERT to "🚨 Red Alert"
+                ProceduralHudMode.ARC_DEFAULT to "3D Arc Core",
+                ProceduralHudMode.IRON_MAN_BUST_3D to "3D Bust",
+                ProceduralHudMode.ADSB_AIRSPACE_RADAR to "ADS-B Radar",
+                ProceduralHudMode.SENTRY_MATRIX to "Sentry Matrix",
+                ProceduralHudMode.GHOST_PILOT to "Ghost Pilot",
+                ProceduralHudMode.RED_ALERT to "Red Alert"
             )
             featuredModes.forEach { (mode, label) ->
                 val selected = activeHudMode == mode
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(
-                            if (selected) Brush.horizontalGradient(listOf(AccentSkyCyan, RoyalPurplePrimary))
-                            else Brush.horizontalGradient(listOf(Color(0xFF141B30), Color(0xFF141B30)))
+                            if (selected) themeColors.primary.copy(alpha = 0.16f)
+                            else themeColors.surfacePill
                         )
                         .border(
                             1.dp,
-                            if (selected) Color.White else AccentSkyCyan.copy(alpha = 0.35f),
-                            RoundedCornerShape(14.dp)
+                            if (selected) themeColors.primary else themeColors.border,
+                            RoundedCornerShape(8.dp)
                         )
                         .clickable { ProceduralHudModeState.setMode(mode) }
                         .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -204,9 +198,9 @@ fun AbuZarPrivateAgentCommandDeck(
                 ) {
                     Text(
                         text = label,
-                        color = if (selected) Color.White else TextLavenderMuted,
+                        color = if (selected) themeColors.textPrimary else themeColors.textSecondary,
                         fontSize = 11.5.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
                     )
                 }
             }
@@ -221,15 +215,15 @@ fun AbuZarPrivateAgentCommandDeck(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(RoundedCornerShape(10.dp))
                     .background(
-                        if (airGestureState.isEnabled) AccentMintEmerald.copy(alpha = 0.22f)
-                        else Color(0xFF141B30)
+                        if (airGestureState.isEnabled) themeColors.statusEmerald.copy(alpha = 0.14f)
+                        else themeColors.surfacePill
                     )
                     .border(
                         1.dp,
-                        if (airGestureState.isEnabled) AccentMintEmerald else AccentSkyCyan.copy(alpha = 0.4f),
-                        RoundedCornerShape(18.dp)
+                        if (airGestureState.isEnabled) themeColors.statusEmerald else themeColors.border,
+                        RoundedCornerShape(10.dp)
                     )
                     .clickable {
                         ProximityAirGestureManager.setEnabled(context, !airGestureState.isEnabled)
@@ -239,16 +233,16 @@ fun AbuZarPrivateAgentCommandDeck(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = if (airGestureState.isEnabled) "🖐️ Air Gestures: ON" else "🖐️ Air Gestures: OFF",
-                        color = Color.White,
+                        text = if (airGestureState.isEnabled) "Air Gestures: ON" else "Air Gestures: OFF",
+                        color = themeColors.textPrimary,
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
                         text = "Wave • 2x Vision • Hover (${airGestureState.totalGesturesDetected})",
-                        color = if (airGestureState.isEnabled) AccentMintEmerald else TextLavenderMuted,
+                        color = if (airGestureState.isEnabled) themeColors.statusEmerald else themeColors.textSecondary,
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.Normal
                     )
                 }
             }
@@ -257,15 +251,15 @@ fun AbuZarPrivateAgentCommandDeck(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(RoundedCornerShape(10.dp))
                     .background(
-                        if (sentryState.isArmed) AlertCrimson.copy(alpha = 0.28f)
-                        else Color(0xFF141B30)
+                        if (sentryState.isArmed) themeColors.statusRoseRed.copy(alpha = 0.16f)
+                        else themeColors.surfacePill
                     )
                     .border(
                         1.dp,
-                        if (sentryState.isArmed) AlertCrimson else AccentChampagneGold.copy(alpha = 0.5f),
-                        RoundedCornerShape(18.dp)
+                        if (sentryState.isArmed) themeColors.statusRoseRed else themeColors.border,
+                        RoundedCornerShape(10.dp)
                     )
                     .clickable {
                         JarvisWatchmanManager.setSentryModeArmed(context, !sentryState.isArmed)
@@ -275,16 +269,16 @@ fun AbuZarPrivateAgentCommandDeck(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = if (sentryState.isArmed) "🚨 Sentry: ARMED" else "🛡️ Desk Sentry: OFF",
-                        color = Color.White,
+                        text = if (sentryState.isArmed) "Sentry: ARMED" else "Desk Sentry: OFF",
+                        color = themeColors.textPrimary,
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
                         text = if (sentryState.isArmed) "Motion -> Photo + Siren" else "Tap to arm anti-theft",
-                        color = if (sentryState.isArmed) AccentChampagneGold else TextLavenderMuted,
+                        color = if (sentryState.isArmed) themeColors.statusAmber else themeColors.textSecondary,
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.Normal
                     )
                 }
             }
@@ -298,16 +292,16 @@ fun AbuZarPrivateAgentCommandDeck(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     listOf(
-                        AirGestureType.SINGLE_WAVE to "👋 Wave (Next)",
-                        AirGestureType.DOUBLE_WAVE to "📸 2x Wave (Vision)",
-                        AirGestureType.PALM_HOVER to "✋ Hover (Play/Pause)"
+                        AirGestureType.SINGLE_WAVE to "Wave (Next)",
+                        AirGestureType.DOUBLE_WAVE to "2x Wave (Vision)",
+                        AirGestureType.PALM_HOVER to "Hover (Play/Pause)"
                     ).forEach { (gType, label) ->
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color.Black.copy(alpha = 0.35f))
-                                .border(1.dp, AccentSkyCyan.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(themeColors.surfacePill)
+                                .border(1.dp, themeColors.border, RoundedCornerShape(8.dp))
                                 .clickable {
                                     ProximityAirGestureManager.triggerGestureManually(context, gType)
                                 }
@@ -316,18 +310,18 @@ fun AbuZarPrivateAgentCommandDeck(
                         ) {
                             Text(
                                 text = label,
-                                color = AccentSkyCyan,
+                                color = themeColors.primary,
                                 fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
                 }
                 Text(
                     text = airGestureState.lastActionSummaryHinglish,
-                    color = AccentMintEmerald,
+                    color = themeColors.statusEmerald,
                     fontSize = 10.5.sp,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.Medium
                 )
             }
         }
@@ -336,9 +330,9 @@ fun AbuZarPrivateAgentCommandDeck(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color(0xFF0A1224))
-                .border(1.dp, AccentSkyCyan.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .clip(RoundedCornerShape(10.dp))
+                .background(themeColors.surfaceElevated)
+                .border(1.dp, themeColors.border, RoundedCornerShape(10.dp))
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -349,14 +343,14 @@ fun AbuZarPrivateAgentCommandDeck(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "✈️ ADS-B Overhead Aircraft Telemetry (${radarSnapshot.aircraftList.size} Flights)",
-                        color = Color.White,
+                        text = "ADS-B Aircraft Telemetry (${radarSnapshot.aircraftList.size} Flights)",
+                        color = themeColors.textPrimary,
                         fontSize = 12.5.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
                         text = radarSnapshot.spokenHinglishBriefing,
-                        color = TextLavenderMuted,
+                        color = themeColors.textSecondary,
                         fontSize = 10.5.sp,
                         maxLines = 2
                     )
@@ -394,21 +388,22 @@ fun AbuZarPrivateAgentCommandDeck(
                     radarSnapshot.aircraftList.take(6).forEach { flight ->
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFF13203B))
-                                .border(1.dp, AccentMintEmerald.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(themeColors.surfacePill)
+                                .border(1.dp, themeColors.border, RoundedCornerShape(8.dp))
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
                             Column {
                                 Text(
-                                    text = "✈️ ${flight.callsign} • ${String.format(Locale.US, "%.1f", flight.distanceKm)} km",
-                                    color = AccentChampagneGold,
+                                    text = "${flight.callsign} • ${String.format(Locale.US, "%.1f", flight.distanceKm)} km",
+                                    color = themeColors.textPrimary,
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Medium
                                 )
                                 Text(
                                     text = "${flight.altitudeFeet} ft • ${flight.speedKmh} km/h • ${flight.originCountry}",
-                                    color = Color.White.copy(alpha = 0.85f),
+                                    color = themeColors.textSecondary,
                                     fontSize = 9.5.sp
                                 )
                             }
@@ -418,7 +413,7 @@ fun AbuZarPrivateAgentCommandDeck(
             }
         }
 
-        // 4. HERMES CONSCIOUSNESS VAULT (SOUL.md | USER.md | AGENT.md) & LOCAL OLLAMA BRIDGE BUTTONS
+        // 4. CONSCIOUSNESS VAULT (SOUL.md | USER.md | AGENT.md) & LOCAL OLLAMA BRIDGE BUTTONS
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -426,38 +421,38 @@ fun AbuZarPrivateAgentCommandDeck(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(RoyalPurplePrimary.copy(alpha = 0.25f))
-                    .border(1.dp, RoyalPurplePrimary, RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (showConsciousnessVault) themeColors.primary.copy(alpha = 0.14f) else themeColors.surfacePill)
+                    .border(1.dp, if (showConsciousnessVault) themeColors.primary else themeColors.border, RoundedCornerShape(8.dp))
                     .clickable { showConsciousnessVault = !showConsciousnessVault }
                     .padding(vertical = 10.dp)
                     .testTag("btn_toggle_consciousness_vault"),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "🧠 SOUL / USER / AGENT.md (${consciousnessSnap.distilledMacros.size})",
-                    color = Color.White,
+                    text = "SOUL / USER / AGENT.md (${consciousnessSnap.distilledMacros.size})",
+                    color = themeColors.textPrimary,
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold
+                    fontWeight = FontWeight.Medium
                 )
             }
 
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(AccentRosePink.copy(alpha = 0.22f))
-                    .border(1.dp, AccentRosePink, RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (showOllamaPanel) themeColors.primary.copy(alpha = 0.14f) else themeColors.surfacePill)
+                    .border(1.dp, if (showOllamaPanel) themeColors.primary else themeColors.border, RoundedCornerShape(8.dp))
                     .clickable { showOllamaPanel = !showOllamaPanel }
                     .padding(vertical = 10.dp)
                     .testTag("btn_toggle_ollama_bridge"),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (ollamaConfig.isOnline) "🦙 Ollama: ONLINE" else "🦙 Local Ollama (:11434)",
-                    color = Color.White,
+                    text = if (ollamaConfig.isOnline) "Ollama: Online" else "Local Ollama (:11434)",
+                    color = themeColors.textPrimary,
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold
+                    fontWeight = FontWeight.Medium
                 )
             }
         }

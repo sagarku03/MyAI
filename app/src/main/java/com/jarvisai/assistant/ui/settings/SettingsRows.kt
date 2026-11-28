@@ -44,22 +44,22 @@ import com.jarvisai.assistant.ui.components.bouncyOverscroll
  * Shared AntiGem Settings palette tokens harmonized cleanly with Jarvis Obsidian Dark theme.
  */
 object AgySettingsColors {
-    val BgCanvas = Color(0xFF0A0D14)
-    val CardBg = Color(0xFF121722)
-    val CardBgElevated = Color(0xFF171E2E)
-    val CardBorder = Color(0xFF1E293B)
+    val BgCanvas = Color(0xFF0D0E12)
+    val CardBg = Color(0xFF15171C)
+    val CardBgElevated = Color(0xFF1D2027)
+    val CardBorder = Color(0xFF2A2E38)
     val Terracotta = Color(0xFFD97757)
-    val GeminiBlue = Color(0xFF4C8DF6)
-    val GeminiPurple = Color(0xFFA855F7)
-    val QuotaGreen = Color(0xFF10B981)
-    val Warning = Color(0xFFF59E0B)
+    val GeminiBlue = Color(0xFF5B8DEF)
+    val GeminiPurple = Color(0xFF8B74EB)
+    val QuotaGreen = Color(0xFF22C55E)
+    val Warning = Color(0xFFEAB308)
     val AccentTeal = Color(0xFF14B8A6)
-    val AccentPink = Color(0xFFEC4899)
-    val AccentIndigo = Color(0xFF6366F1)
-    val Info = Color(0xFF38BDF8)
+    val AccentPink = Color(0xFFEF4444)
+    val AccentIndigo = Color(0xFF5B8DEF)
+    val Info = Color(0xFF5B8DEF)
     val Danger = Color(0xFFEF4444)
-    val TextPrimary = Color(0xFFF8FAFC)
-    val TextSecondary = Color(0xFF94A3B8)
+    val TextPrimary = Color(0xFFECEEF2)
+    val TextSecondary = Color(0xFF98A0AE)
 }
 
 /**
@@ -106,19 +106,21 @@ fun SettingsRowGroup(
     items: List<SettingsRowItem>,
     cardBg: Color = AgySettingsColors.CardBg
 ) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
+    val resolvedCardBg = if (cardBg == AgySettingsColors.CardBg) themeColors.cardSurface else cardBg
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = cardBg,
-        border = BorderStroke(1.dp, AgySettingsColors.CardBorder)
+        shape = RoundedCornerShape(12.dp),
+        color = resolvedCardBg,
+        border = BorderStroke(1.dp, themeColors.cardBorder)
     ) {
         Column {
             items.forEachIndexed { i, item ->
                 if (i > 0) {
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 60.dp),
-                        thickness = 0.5.dp,
-                        color = Color.White.copy(alpha = 0.06f)
+                        thickness = 1.dp,
+                        color = themeColors.divider
                     )
                 }
                 SettingsRowView(item)
@@ -129,35 +131,37 @@ fun SettingsRowGroup(
 
 @Composable
 private fun SettingsRowView(item: SettingsRowItem) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
             .clickable(onClick = item.onClick)
-            .padding(start = 14.dp, end = 10.dp, top = 11.dp, bottom = 11.dp)
+            .padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 12.dp)
             .testTag("settings_row_${item.testTagId}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
                 .size(32.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(item.tint.copy(alpha = 0.16f)),
+                .clip(RoundedCornerShape(8.dp))
+                .background(themeColors.surfaceElevated)
+                .border(1.dp, themeColors.border, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = item.icon,
                 contentDescription = null,
                 tint = item.tint,
-                modifier = Modifier.size(19.dp)
+                modifier = Modifier.size(18.dp)
             )
         }
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(12.dp))
         Text(
             text = item.title,
-            fontSize = 15.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
-            color = AgySettingsColors.TextPrimary,
+            color = themeColors.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
@@ -167,16 +171,16 @@ private fun SettingsRowView(item: SettingsRowItem) {
             if (item.valueColor != null) {
                 Box(
                     modifier = Modifier
-                        .size(7.dp)
+                        .size(8.dp)
                         .clip(CircleShape)
                         .background(item.valueColor)
                 )
-                Spacer(Modifier.width(5.dp))
+                Spacer(Modifier.width(6.dp))
             }
             Text(
                 text = item.value,
-                fontSize = 12.5.sp,
-                color = AgySettingsColors.TextSecondary,
+                fontSize = 12.sp,
+                color = themeColors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 150.dp)
@@ -185,9 +189,9 @@ private fun SettingsRowView(item: SettingsRowItem) {
         Icon(
             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
             contentDescription = "Open ${item.title}",
-            tint = AgySettingsColors.TextSecondary.copy(alpha = 0.6f),
+            tint = themeColors.textMuted,
             modifier = Modifier
-                .padding(start = 2.dp)
+                .padding(start = 4.dp)
                 .size(20.dp)
         )
     }

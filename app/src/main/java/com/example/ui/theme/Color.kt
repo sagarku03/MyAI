@@ -4,99 +4,113 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 
 // ============================================================================
-// CURATED THEME PALETTE CONSTANTS (from @uiuxaadi reference specs)
+// AGENTRA PRECISION WORKSTATION PALETTE SYSTEM (Calibrated Matte Surfaces)
 // ============================================================================
 
-// --- 1. Ocean Blue Palette ---
-// Ref card: Primary #0B1F3B, Accent #2563EB, Secondary #60A5FA, Surface #DBEAFE, Background #F0F7FF
-val OceanBluePrimaryDark = Color(0xFF60A5FA)
-val OceanBlueAccentDark = Color(0xFF2563EB)
-val OceanBlueSecondaryDark = Color(0xFF93C5FD)
-val OceanBlueSurfaceDark = Color(0xFF0E1B33)
-val OceanBlueSurfaceElevatedDark = Color(0xFF152747)
-val OceanBlueBackgroundDark = Color(0xFF070F1E)
-val OceanBlueBorderDark = Color(0xFF1E3A5F)
+// --- 0. Graphite Workstation (Default Neutral Matte) ---
+val GraphitePrimaryDark = Color(0xFF5B8DEF)
+val GraphiteAccentDark = Color(0xFF5B8DEF)
+val GraphiteSecondaryDark = Color(0xFF8AB4F8)
+val GraphiteSurfaceDark = Color(0xFF15171C)
+val GraphiteSurfaceElevatedDark = Color(0xFF1D2027)
+val GraphiteBackgroundDark = Color(0xFF0D0E12)
+val GraphiteBorderDark = Color(0xFF2A2E38)
 
-val OceanBluePrimaryLight = Color(0xFF0B1F3B)
+val GraphitePrimaryLight = Color(0xFF2563EB)
+val GraphiteAccentLight = Color(0xFF2563EB)
+val GraphiteSecondaryLight = Color(0xFF3B82F6)
+val GraphiteSurfaceLight = Color(0xFFFFFFFF)
+val GraphiteSurfaceElevatedLight = Color(0xFFF0F2F5)
+val GraphiteBackgroundLight = Color(0xFFF7F8FA)
+val GraphiteBorderLight = Color(0xFFDCE0E7)
+
+// --- 1. Ocean Blue Palette ---
+val OceanBluePrimaryDark = Color(0xFF60A5FA)
+val OceanBlueAccentDark = Color(0xFF3B82F6)
+val OceanBlueSecondaryDark = Color(0xFF93C5FD)
+val OceanBlueSurfaceDark = Color(0xFF131720)
+val OceanBlueSurfaceElevatedDark = Color(0xFF1B202C)
+val OceanBlueBackgroundDark = Color(0xFF0C0F14)
+val OceanBlueBorderDark = Color(0xFF263042)
+
+val OceanBluePrimaryLight = Color(0xFF1D4ED8)
 val OceanBlueAccentLight = Color(0xFF2563EB)
 val OceanBlueSecondaryLight = Color(0xFF60A5FA)
 val OceanBlueSurfaceLight = Color(0xFFFFFFFF)
-val OceanBlueSurfaceElevatedLight = Color(0xFFDBEAFE)
-val OceanBlueBackgroundLight = Color(0xFFF0F7FF)
-val OceanBlueBorderLight = Color(0xFF93C5FD)
+val OceanBlueSurfaceElevatedLight = Color(0xFFEFF4FC)
+val OceanBlueBackgroundLight = Color(0xFFF6F8FC)
+val OceanBlueBorderLight = Color(0xFFD1DDF3)
 
-// --- 2. Royal Purple Palette ---
-// Ref card: Primary #5B21B6, Accent #8B5CF6, Secondary #C7B3FF, Surface #EDE9FE, Background #FAF9FF
-val RoyalPurplePrimaryDark = Color(0xFFA855F7)
-val RoyalPurpleAccentDark = Color(0xFF8B5CF6)
-val RoyalPurpleSecondaryDark = Color(0xFFC084FC)
-val RoyalPurpleSurfaceDark = Color(0xFF141829)
-val RoyalPurpleSurfaceElevatedDark = Color(0xFF1D2238)
-val RoyalPurpleBackgroundDark = Color(0xFF08090F)
-val RoyalPurpleBorderDark = Color(0xFF2E3654)
+// --- 2. Royal Purple Palette (Restrained Violet on Neutral Slate) ---
+val RoyalPurplePrimaryDark = Color(0xFF9B87F5)
+val RoyalPurpleAccentDark = Color(0xFF8B74EB)
+val RoyalPurpleSecondaryDark = Color(0xFFB8A9F7)
+val RoyalPurpleSurfaceDark = Color(0xFF15141C)
+val RoyalPurpleSurfaceElevatedDark = Color(0xFF1D1C26)
+val RoyalPurpleBackgroundDark = Color(0xFF0D0C12)
+val RoyalPurpleBorderDark = Color(0xFF2C2A3A)
 
-val RoyalPurplePrimaryLight = Color(0xFF5B21B6)
+val RoyalPurplePrimaryLight = Color(0xFF6D28D9)
 val RoyalPurpleAccentLight = Color(0xFF7C3AED)
-val RoyalPurpleSecondaryLight = Color(0xFFC7B3FF)
+val RoyalPurpleSecondaryLight = Color(0xFFA78BFA)
 val RoyalPurpleSurfaceLight = Color(0xFFFFFFFF)
-val RoyalPurpleSurfaceElevatedLight = Color(0xFFEDE9FE)
-val RoyalPurpleBackgroundLight = Color(0xFFFAF9FF)
-val RoyalPurpleBorderLight = Color(0xFFC4B5FD)
+val RoyalPurpleSurfaceElevatedLight = Color(0xFFF3F1FC)
+val RoyalPurpleBackgroundLight = Color(0xFFF9F8FC)
+val RoyalPurpleBorderLight = Color(0xFFDFD9F4)
 
-// --- 3. Aqua Mint Palette ---
-// Ref card: Primary #042F2E, Accent #0D9488, Secondary #5EEAD4, Surface #D6FFFF, Background #ECFEFE
-val AquaMintPrimaryDark = Color(0xFF5EEAD4)
-val AquaMintAccentDark = Color(0xFF0D9488)
-val AquaMintSecondaryDark = Color(0xFF99F6E4)
-val AquaMintSurfaceDark = Color(0xFF0B2524)
-val AquaMintSurfaceElevatedDark = Color(0xFF123836)
-val AquaMintBackgroundDark = Color(0xFF041514)
-val AquaMintBorderDark = Color(0xFF1A4744)
+// --- 3. Aqua Mint Palette (Calm Sage Teal on Neutral Charcoal) ---
+val AquaMintPrimaryDark = Color(0xFF2DD4BF)
+val AquaMintAccentDark = Color(0xFF14B8A6)
+val AquaMintSecondaryDark = Color(0xFF5EEAD4)
+val AquaMintSurfaceDark = Color(0xFF131A19)
+val AquaMintSurfaceElevatedDark = Color(0xFF1A2322)
+val AquaMintBackgroundDark = Color(0xFF0C1110)
+val AquaMintBorderDark = Color(0xFF253533)
 
-val AquaMintPrimaryLight = Color(0xFF042F2E)
+val AquaMintPrimaryLight = Color(0xFF0F766E)
 val AquaMintAccentLight = Color(0xFF0D9488)
-val AquaMintSecondaryLight = Color(0xFF5EEAD4)
+val AquaMintSecondaryLight = Color(0xFF2DD4BF)
 val AquaMintSurfaceLight = Color(0xFFFFFFFF)
-val AquaMintSurfaceElevatedLight = Color(0xFFD6FFFF)
-val AquaMintBackgroundLight = Color(0xFFECFEFE)
-val AquaMintBorderLight = Color(0xFF99F6E4)
+val AquaMintSurfaceElevatedLight = Color(0xFFEEF7F6)
+val AquaMintBackgroundLight = Color(0xFFF5FAFA)
+val AquaMintBorderLight = Color(0xFFCCE3E0)
 
 // ============================================================================
 // BASE TOKENS & BACKWARD COMPATIBILITY
 // ============================================================================
-val PurpleVoidBg = RoyalPurpleBackgroundDark
-val PurpleCosmosBg = Color(0xFF0E111D)
+val PurpleVoidBg = GraphiteBackgroundDark
+val PurpleCosmosBg = GraphiteSurfaceDark
 
-val LiquidGlassSurface = RoyalPurpleSurfaceDark
-val LiquidGlassElevated = RoyalPurpleSurfaceElevatedDark
-val LiquidGlassPill = Color(0xFF252B45)
+val LiquidGlassSurface = GraphiteSurfaceDark
+val LiquidGlassElevated = GraphiteSurfaceElevatedDark
+val LiquidGlassPill = Color(0xFF252932)
 
-val GlassRimLightTop = Color(0x59FFFFFF)
-val GlassRimLightMid = Color(0x668B5CF6)
-val GlassRimLightBottom = Color(0x4038BDF8)
-val GlassInnerSheen = Color(0x18FFFFFF)
+val GlassRimLightTop = GraphiteBorderDark
+val GlassRimLightMid = GraphiteBorderDark
+val GlassRimLightBottom = GraphiteBorderDark
+val GlassInnerSheen = Color(0x0DFFFFFF)
 
-val RoyalPurplePrimary = Color(0xFF8B5CF6)
-val ElectricOrchid = Color(0xFFA855F7)
-val SoftLavenderGlow = Color(0xFFC084FC)
-val DeepAmethystPressed = Color(0xFF6D28D9)
-val RoyalIndigoAccent = Color(0xFF6366F1)
-val PaleLavenderIce = Color(0xFFF3E8FF)
+val RoyalPurplePrimary = Color(0xFF5B8DEF)
+val ElectricOrchid = Color(0xFF8B74EB)
+val SoftLavenderGlow = Color(0xFF8AB4F8)
+val DeepAmethystPressed = Color(0xFF3B6FD8)
+val RoyalIndigoAccent = Color(0xFF5B8DEF)
+val PaleLavenderIce = Color(0xFFECEEF2)
 
-val AccentSkyCyan = Color(0xFF38BDF8)
-val AccentCyanBright = Color(0xFF22D3EE)
-val AccentRosePink = Color(0xFFEC4899)
-val VelvetRoseAccent = Color(0xFFF472B6)
-val AccentChampagneGold = Color(0xFFF59E0B)
-val AccentMintEmerald = Color(0xFF10B981)
+val AccentSkyCyan = Color(0xFF5B8DEF)
+val AccentCyanBright = Color(0xFF38BDF8)
+val AccentRosePink = Color(0xFFE5484D)
+val VelvetRoseAccent = Color(0xFFEF4444)
+val AccentChampagneGold = Color(0xFFD97706)
+val AccentMintEmerald = Color(0xFF22C55E)
 
-val TextPureWhite = Color(0xFFF8FAFC)
-val TextLavenderMuted = Color(0xFFCBD5E1)
-val TextVioletDim = Color(0xFF94A3B8)
+val TextPureWhite = Color(0xFFECEEF2)
+val TextLavenderMuted = Color(0xFF98A0AE)
+val TextVioletDim = Color(0xFF6B7280)
 
-val StatusEmerald = Color(0xFF34D399)
-val StatusAmber = Color(0xFFFBBF24)
-val StatusRoseRed = Color(0xFFFB7185)
+val StatusEmerald = Color(0xFF22C55E)
+val StatusAmber = Color(0xFFEAB308)
+val StatusRoseRed = Color(0xFFEF4444)
 
 val JarvisMidnightBg = PurpleVoidBg
 val JarvisNavyBgSecondary = PurpleCosmosBg
@@ -158,14 +172,15 @@ val HighContrastSurface = AquaMintSurfaceDark
 // ============================================================================
 
 enum class ThemePalette(val id: String, val displayName: String, val previewColor: Color, val accentHex: String) {
-    OCEAN_BLUE("ocean_blue", "Ocean Blue", Color(0xFF2563EB), "#2563EB"),
-    ROYAL_PURPLE("royal_purple", "Royal Purple", Color(0xFF8B5CF6), "#8B5CF6"),
-    AQUA_MINT("aqua_mint", "Aqua Mint", Color(0xFF0D9488), "#0D9488");
+    GRAPHITE("graphite", "Graphite", Color(0xFF5B8DEF), "#5B8DEF"),
+    OCEAN_BLUE("ocean_blue", "Ocean", Color(0xFF3B82F6), "#3B82F6"),
+    ROYAL_PURPLE("royal_purple", "Violet", Color(0xFF8B74EB), "#8B74EB"),
+    AQUA_MINT("aqua_mint", "Teal", Color(0xFF14B8A6), "#14B8A6");
 
     companion object {
         fun fromId(id: String?): ThemePalette {
             return entries.find { it.id.equals(id, ignoreCase = true) || it.name.equals(id, ignoreCase = true) }
-                ?: ROYAL_PURPLE
+                ?: GRAPHITE
         }
     }
 }
@@ -186,27 +201,32 @@ enum class ThemeDisplayMode(val id: String, val displayName: String) {
 enum class JarvisThemeMode(
     val displayName: String,
     val subtitle: String = "",
-    val palette: ThemePalette = ThemePalette.ROYAL_PURPLE,
+    val palette: ThemePalette = ThemePalette.GRAPHITE,
     val displayMode: ThemeDisplayMode = ThemeDisplayMode.DARK
 ) {
-    // 3 Curated Reference Presets
-    OCEAN_BLUE("Ocean Blue", "Clean deep ocean blue with electric azure accents", ThemePalette.OCEAN_BLUE, ThemeDisplayMode.DARK),
-    ROYAL_PURPLE("Royal Purple", "Futuristic velvet purple with lavender accents", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.DARK),
-    AQUA_MINT("Aqua Mint", "Cyberpunk mint emerald with aqua cyan accents", ThemePalette.AQUA_MINT, ThemeDisplayMode.DARK),
+    // Primary Workstation Presets
+    GRAPHITE("Graphite", "Matte charcoal surfaces with calm cobalt focus", ThemePalette.GRAPHITE, ThemeDisplayMode.DARK),
+    GRAPHITE_LIGHT("Graphite Light", "Warm paper light canvas with crisp cobalt focus", ThemePalette.GRAPHITE, ThemeDisplayMode.LIGHT),
+    GRAPHITE_DARK("Graphite Dark", "Matte charcoal canvas with restrained cobalt focus", ThemePalette.GRAPHITE, ThemeDisplayMode.DARK),
 
-    OCEAN_BLUE_LIGHT("Ocean Blue Light", "Bright daylight ocean blue", ThemePalette.OCEAN_BLUE, ThemeDisplayMode.LIGHT),
-    OCEAN_BLUE_DARK("Ocean Blue Dark", "Deep midnight oceanic contrast", ThemePalette.OCEAN_BLUE, ThemeDisplayMode.DARK),
-    ROYAL_PURPLE_LIGHT("Royal Purple Light", "Bright daylight lilac royal purple", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.LIGHT),
-    ROYAL_PURPLE_DARK("Royal Purple Dark", "Deep obsidian royal purple", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.DARK),
-    AQUA_MINT_LIGHT("Aqua Mint Light", "Bright fresh daylight mint", ThemePalette.AQUA_MINT, ThemeDisplayMode.LIGHT),
-    AQUA_MINT_DARK("Aqua Mint Dark", "Deep obsidian cyberpunk aqua", ThemePalette.AQUA_MINT, ThemeDisplayMode.DARK),
-    SYSTEM_DEFAULT("System Default", "Matches Android device day/night setting", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.SYSTEM),
+    // Curated Reference Presets
+    OCEAN_BLUE("Ocean", "Deep slate blue with restrained azure accents", ThemePalette.OCEAN_BLUE, ThemeDisplayMode.DARK),
+    ROYAL_PURPLE("Violet", "Neutral slate with muted violet accents", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.DARK),
+    AQUA_MINT("Teal", "Charcoal surfaces with calm teal accents", ThemePalette.AQUA_MINT, ThemeDisplayMode.DARK),
+
+    OCEAN_BLUE_LIGHT("Ocean Light", "Clean daylight blue palette", ThemePalette.OCEAN_BLUE, ThemeDisplayMode.LIGHT),
+    OCEAN_BLUE_DARK("Ocean Dark", "Deep slate ocean contrast", ThemePalette.OCEAN_BLUE, ThemeDisplayMode.DARK),
+    ROYAL_PURPLE_LIGHT("Violet Light", "Clean daylight violet palette", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.LIGHT),
+    ROYAL_PURPLE_DARK("Violet Dark", "Neutral slate with muted violet", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.DARK),
+    AQUA_MINT_LIGHT("Teal Light", "Clean daylight teal palette", ThemePalette.AQUA_MINT, ThemeDisplayMode.LIGHT),
+    AQUA_MINT_DARK("Teal Dark", "Charcoal surfaces with calm teal", ThemePalette.AQUA_MINT, ThemeDisplayMode.DARK),
+    SYSTEM_DEFAULT("System Default", "Matches Android device day/night setting", ThemePalette.GRAPHITE, ThemeDisplayMode.SYSTEM),
 
     // Backward-Compatible Presets
-    ARC_CYAN("Royal Purple & Cyan", "Velvet royal purple with electric cyan accents", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.DARK),
+    ARC_CYAN("Graphite Slate", "Neutral charcoal with slate blue accents", ThemePalette.GRAPHITE, ThemeDisplayMode.DARK),
     DEEP_COBALT("Deep Ocean Cobalt", "Deep ocean sapphire and cobalt", ThemePalette.OCEAN_BLUE, ThemeDisplayMode.DARK),
-    STEALTH_DARK("Stealth Obsidian", "Ultra-dark OLED obsidian with orchid accents", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.DARK),
-    HIGH_CONTRAST("High Contrast Aqua", "Maximum contrast high visibility mint & cyan", ThemePalette.AQUA_MINT, ThemeDisplayMode.DARK);
+    STEALTH_DARK("Stealth Charcoal", "Dark matte charcoal with subtle violet accents", ThemePalette.ROYAL_PURPLE, ThemeDisplayMode.DARK),
+    HIGH_CONTRAST("High Contrast Teal", "High-legibility teal on matte charcoal", ThemePalette.AQUA_MINT, ThemeDisplayMode.DARK);
 
     val label: String
         get() = displayName
@@ -232,52 +252,80 @@ data class JarvisThemeColors(
     val cardSurface: Color = surface,
     val cardBorder: Color = border,
     val onPrimary: Color = Color.White,
-    val codeBackground: Color = if (isDark) Color(0xFF0A0E1A) else Color(0xFFF1F5F9),
-    val codeHeader: Color = if (isDark) Color(0xFF12192D) else Color(0xFFE2E8F0),
-    val codeText: Color = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A),
+    val codeBackground: Color = if (isDark) Color(0xFF101216) else Color(0xFFF3F4F6),
+    val codeHeader: Color = if (isDark) Color(0xFF181B22) else Color(0xFFE5E7EB),
+    val codeText: Color = if (isDark) Color(0xFFE5E7EB) else Color(0xFF111827),
     val inputBackground: Color = surfaceElevated,
     val chatBubbleUser: Color = primary,
     val chatBubbleAssistant: Color = surfaceElevated,
-    val divider: Color = border.copy(alpha = 0.45f),
-    val statusEmerald: Color = if (isDark) Color(0xFF10B981) else Color(0xFF059669),
-    val statusAmber: Color = if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706),
+    val divider: Color = border,
+    val statusEmerald: Color = if (isDark) Color(0xFF22C55E) else Color(0xFF16A34A),
+    val statusAmber: Color = if (isDark) Color(0xFFEAB308) else Color(0xFFD97706),
     val statusRoseRed: Color = if (isDark) Color(0xFFEF4444) else Color(0xFFDC2626)
 )
 
 val LocalJarvisColors = compositionLocalOf {
-    getJarvisThemeColors(ThemePalette.ROYAL_PURPLE, isDark = true)
+    getJarvisThemeColors(ThemePalette.GRAPHITE, isDark = true)
 }
 
 fun getJarvisThemeColors(palette: ThemePalette, isDark: Boolean): JarvisThemeColors {
     return if (isDark) {
         when (palette) {
+            ThemePalette.GRAPHITE -> JarvisThemeColors(
+                isDark = true,
+                palette = palette,
+                background = GraphiteBackgroundDark,
+                surface = GraphiteSurfaceDark,
+                surfaceElevated = GraphiteSurfaceElevatedDark,
+                surfacePill = Color(0xFF252932),
+                cardSurface = GraphiteSurfaceDark,
+                cardBorder = GraphiteBorderDark,
+                primary = GraphitePrimaryDark,
+                onPrimary = Color.White,
+                accent = GraphiteAccentDark,
+                secondary = GraphiteSecondaryDark,
+                textPrimary = Color(0xFFECEEF2),
+                textSecondary = Color(0xFF98A0AE),
+                textMuted = Color(0xFF6B7280),
+                border = GraphiteBorderDark,
+                borderHighlight = GraphiteAccentDark.copy(alpha = 0.45f),
+                glassRimTop = GraphiteBorderDark,
+                glassRimBottom = GraphiteBorderDark,
+                codeBackground = Color(0xFF101216),
+                codeHeader = Color(0xFF181B22),
+                codeText = Color(0xFFE5E7EB),
+                inputBackground = GraphiteSurfaceElevatedDark,
+                chatBubbleUser = GraphiteAccentDark,
+                chatBubbleAssistant = GraphiteSurfaceElevatedDark,
+                divider = GraphiteBorderDark
+            )
             ThemePalette.OCEAN_BLUE -> JarvisThemeColors(
                 isDark = true,
                 palette = palette,
                 background = OceanBlueBackgroundDark,
                 surface = OceanBlueSurfaceDark,
                 surfaceElevated = OceanBlueSurfaceElevatedDark,
-                surfacePill = Color(0xFF1C3259),
+                surfacePill = Color(0xFF222A3A),
                 cardSurface = OceanBlueSurfaceDark,
                 cardBorder = OceanBlueBorderDark,
                 primary = OceanBluePrimaryDark,
                 onPrimary = Color.White,
                 accent = OceanBlueAccentDark,
                 secondary = OceanBlueSecondaryDark,
-                textPrimary = Color(0xFFF8FAFC),
-                textSecondary = Color(0xFFCBD5E1),
-                textMuted = Color(0xFF94A3B8),
+                textPrimary = Color(0xFFECEEF2),
+                textSecondary = Color(0xFF9BA5B4),
+                textMuted = Color(0xFF6B7280),
                 border = OceanBlueBorderDark,
-                borderHighlight = Color(0xFF2563EB).copy(alpha = 0.55f),
-                glassRimTop = Color(0x40FFFFFF),
-                glassRimBottom = OceanBlueAccentDark.copy(alpha = 0.35f),
-                codeBackground = Color(0xFF0A0E1A),
-                codeHeader = Color(0xFF12192D),
-                codeText = Color(0xFFE2E8F0),
+                borderHighlight = OceanBlueAccentDark.copy(alpha = 0.45f),
+                glassRimTop = OceanBlueBorderDark,
+                glassRimBottom = OceanBlueBorderDark,
+                codeBackground = Color(0xFF101216),
+                codeHeader = Color(0xFF181B22),
+                codeText = Color(0xFFE5E7EB),
                 inputBackground = OceanBlueSurfaceElevatedDark,
                 chatBubbleUser = OceanBlueAccentDark,
                 chatBubbleAssistant = OceanBlueSurfaceElevatedDark,
-                divider = OceanBlueBorderDark.copy(alpha = 0.55f)
+                divider = OceanBlueBorderDark
             )
             ThemePalette.ROYAL_PURPLE -> JarvisThemeColors(
                 isDark = true,
@@ -285,27 +333,27 @@ fun getJarvisThemeColors(palette: ThemePalette, isDark: Boolean): JarvisThemeCol
                 background = RoyalPurpleBackgroundDark,
                 surface = RoyalPurpleSurfaceDark,
                 surfaceElevated = RoyalPurpleSurfaceElevatedDark,
-                surfacePill = LiquidGlassPill,
+                surfacePill = Color(0xFF272534),
                 cardSurface = RoyalPurpleSurfaceDark,
                 cardBorder = RoyalPurpleBorderDark,
                 primary = RoyalPurplePrimaryDark,
                 onPrimary = Color.White,
                 accent = RoyalPurpleAccentDark,
                 secondary = RoyalPurpleSecondaryDark,
-                textPrimary = Color(0xFFF8FAFC),
-                textSecondary = Color(0xFFCBD5E1),
-                textMuted = Color(0xFF94A3B8),
+                textPrimary = Color(0xFFECEEF2),
+                textSecondary = Color(0xFF9E9AAE),
+                textMuted = Color(0xFF6F6C7E),
                 border = RoyalPurpleBorderDark,
-                borderHighlight = RoyalPurpleAccentDark.copy(alpha = 0.55f),
-                glassRimTop = Color(0x50FFFFFF),
-                glassRimBottom = RoyalPurpleAccentDark.copy(alpha = 0.35f),
-                codeBackground = Color(0xFF0A0E1A),
-                codeHeader = Color(0xFF12192D),
-                codeText = Color(0xFFE2E8F0),
+                borderHighlight = RoyalPurpleAccentDark.copy(alpha = 0.45f),
+                glassRimTop = RoyalPurpleBorderDark,
+                glassRimBottom = RoyalPurpleBorderDark,
+                codeBackground = Color(0xFF101216),
+                codeHeader = Color(0xFF181B22),
+                codeText = Color(0xFFE5E7EB),
                 inputBackground = RoyalPurpleSurfaceElevatedDark,
                 chatBubbleUser = RoyalPurpleAccentDark,
                 chatBubbleAssistant = RoyalPurpleSurfaceElevatedDark,
-                divider = RoyalPurpleBorderDark.copy(alpha = 0.55f)
+                divider = RoyalPurpleBorderDark
             )
             ThemePalette.AQUA_MINT -> JarvisThemeColors(
                 isDark = true,
@@ -313,58 +361,86 @@ fun getJarvisThemeColors(palette: ThemePalette, isDark: Boolean): JarvisThemeCol
                 background = AquaMintBackgroundDark,
                 surface = AquaMintSurfaceDark,
                 surfaceElevated = AquaMintSurfaceElevatedDark,
-                surfacePill = Color(0xFF174240),
+                surfacePill = Color(0xFF212D2B),
                 cardSurface = AquaMintSurfaceDark,
                 cardBorder = AquaMintBorderDark,
                 primary = AquaMintPrimaryDark,
-                onPrimary = Color.White,
+                onPrimary = Color(0xFF0A1413),
                 accent = AquaMintAccentDark,
                 secondary = AquaMintSecondaryDark,
-                textPrimary = Color(0xFFF8FAFC),
-                textSecondary = Color(0xFFCBD5E1),
-                textMuted = Color(0xFF94A3B8),
+                textPrimary = Color(0xFFECEEF2),
+                textSecondary = Color(0xFF96A6A3),
+                textMuted = Color(0xFF667572),
                 border = AquaMintBorderDark,
-                borderHighlight = AquaMintAccentDark.copy(alpha = 0.55f),
-                glassRimTop = Color(0x40FFFFFF),
-                glassRimBottom = AquaMintAccentDark.copy(alpha = 0.35f),
-                codeBackground = Color(0xFF0A0E1A),
-                codeHeader = Color(0xFF12192D),
-                codeText = Color(0xFFE2E8F0),
+                borderHighlight = AquaMintAccentDark.copy(alpha = 0.45f),
+                glassRimTop = AquaMintBorderDark,
+                glassRimBottom = AquaMintBorderDark,
+                codeBackground = Color(0xFF101216),
+                codeHeader = Color(0xFF181B22),
+                codeText = Color(0xFFE5E7EB),
                 inputBackground = AquaMintSurfaceElevatedDark,
                 chatBubbleUser = AquaMintAccentDark,
                 chatBubbleAssistant = AquaMintSurfaceElevatedDark,
-                divider = AquaMintBorderDark.copy(alpha = 0.55f)
+                divider = AquaMintBorderDark
             )
         }
     } else {
         when (palette) {
+            ThemePalette.GRAPHITE -> JarvisThemeColors(
+                isDark = false,
+                palette = palette,
+                background = GraphiteBackgroundLight,
+                surface = GraphiteSurfaceLight,
+                surfaceElevated = GraphiteSurfaceElevatedLight,
+                surfacePill = Color(0xFFE5E8EE),
+                cardSurface = GraphiteSurfaceLight,
+                cardBorder = GraphiteBorderLight,
+                primary = GraphitePrimaryLight,
+                onPrimary = Color.White,
+                accent = GraphiteAccentLight,
+                secondary = GraphiteSecondaryLight,
+                textPrimary = Color(0xFF111318),
+                textSecondary = Color(0xFF4B5563),
+                textMuted = Color(0xFF6B7280),
+                border = GraphiteBorderLight,
+                borderHighlight = GraphiteAccentLight.copy(alpha = 0.35f),
+                glassRimTop = GraphiteBorderLight,
+                glassRimBottom = GraphiteBorderLight,
+                codeBackground = Color(0xFFF3F4F6),
+                codeHeader = Color(0xFFE5E7EB),
+                codeText = Color(0xFF111827),
+                inputBackground = Color(0xFFFFFFFF),
+                chatBubbleUser = GraphiteAccentLight,
+                chatBubbleAssistant = Color(0xFFFFFFFF),
+                divider = GraphiteBorderLight
+            )
             ThemePalette.OCEAN_BLUE -> JarvisThemeColors(
                 isDark = false,
                 palette = palette,
                 background = OceanBlueBackgroundLight,
                 surface = OceanBlueSurfaceLight,
                 surfaceElevated = OceanBlueSurfaceElevatedLight,
-                surfacePill = Color(0xFFDBEAFE),
+                surfacePill = Color(0xFFE2EAFB),
                 cardSurface = Color(0xFFFFFFFF),
                 cardBorder = OceanBlueBorderLight,
                 primary = OceanBluePrimaryLight,
                 onPrimary = Color.White,
                 accent = OceanBlueAccentLight,
                 secondary = OceanBlueSecondaryLight,
-                textPrimary = Color(0xFF0B1F3B),
-                textSecondary = Color(0xFF334155),
-                textMuted = Color(0xFF475569),
+                textPrimary = Color(0xFF0F172A),
+                textSecondary = Color(0xFF475569),
+                textMuted = Color(0xFF64748B),
                 border = OceanBlueBorderLight,
-                borderHighlight = OceanBlueAccentLight.copy(alpha = 0.45f),
-                glassRimTop = OceanBlueAccentLight.copy(alpha = 0.25f),
-                glassRimBottom = OceanBlueAccentLight.copy(alpha = 0.20f),
-                codeBackground = Color(0xFFF1F5F9),
-                codeHeader = Color(0xFFE2E8F0),
-                codeText = Color(0xFF0F172A),
+                borderHighlight = OceanBlueAccentLight.copy(alpha = 0.35f),
+                glassRimTop = OceanBlueBorderLight,
+                glassRimBottom = OceanBlueBorderLight,
+                codeBackground = Color(0xFFF3F4F6),
+                codeHeader = Color(0xFFE5E7EB),
+                codeText = Color(0xFF111827),
                 inputBackground = Color(0xFFFFFFFF),
                 chatBubbleUser = OceanBlueAccentLight,
                 chatBubbleAssistant = Color(0xFFFFFFFF),
-                divider = OceanBlueBorderLight.copy(alpha = 0.60f)
+                divider = OceanBlueBorderLight
             )
             ThemePalette.ROYAL_PURPLE -> JarvisThemeColors(
                 isDark = false,
@@ -372,27 +448,27 @@ fun getJarvisThemeColors(palette: ThemePalette, isDark: Boolean): JarvisThemeCol
                 background = RoyalPurpleBackgroundLight,
                 surface = RoyalPurpleSurfaceLight,
                 surfaceElevated = RoyalPurpleSurfaceElevatedLight,
-                surfacePill = Color(0xFFEDE9FE),
+                surfacePill = Color(0xFFECE8FA),
                 cardSurface = Color(0xFFFFFFFF),
                 cardBorder = RoyalPurpleBorderLight,
                 primary = RoyalPurplePrimaryLight,
                 onPrimary = Color.White,
                 accent = RoyalPurpleAccentLight,
                 secondary = RoyalPurpleSecondaryLight,
-                textPrimary = Color(0xFF0F172A),
-                textSecondary = Color(0xFF334155),
-                textMuted = Color(0xFF475569),
+                textPrimary = Color(0xFF14121D),
+                textSecondary = Color(0xFF4B475C),
+                textMuted = Color(0xFF6D6880),
                 border = RoyalPurpleBorderLight,
-                borderHighlight = RoyalPurpleAccentLight.copy(alpha = 0.45f),
-                glassRimTop = RoyalPurpleAccentLight.copy(alpha = 0.25f),
-                glassRimBottom = RoyalPurpleAccentLight.copy(alpha = 0.20f),
-                codeBackground = Color(0xFFF1F5F9),
-                codeHeader = Color(0xFFE2E8F0),
-                codeText = Color(0xFF0F172A),
+                borderHighlight = RoyalPurpleAccentLight.copy(alpha = 0.35f),
+                glassRimTop = RoyalPurpleBorderLight,
+                glassRimBottom = RoyalPurpleBorderLight,
+                codeBackground = Color(0xFFF3F4F6),
+                codeHeader = Color(0xFFE5E7EB),
+                codeText = Color(0xFF111827),
                 inputBackground = Color(0xFFFFFFFF),
                 chatBubbleUser = RoyalPurplePrimaryLight,
                 chatBubbleAssistant = Color(0xFFFFFFFF),
-                divider = RoyalPurpleBorderLight.copy(alpha = 0.60f)
+                divider = RoyalPurpleBorderLight
             )
             ThemePalette.AQUA_MINT -> JarvisThemeColors(
                 isDark = false,
@@ -400,27 +476,27 @@ fun getJarvisThemeColors(palette: ThemePalette, isDark: Boolean): JarvisThemeCol
                 background = AquaMintBackgroundLight,
                 surface = AquaMintSurfaceLight,
                 surfaceElevated = AquaMintSurfaceElevatedLight,
-                surfacePill = Color(0xFFD6FFFF),
+                surfacePill = Color(0xFFE1F2EF),
                 cardSurface = Color(0xFFFFFFFF),
                 cardBorder = AquaMintBorderLight,
                 primary = AquaMintPrimaryLight,
                 onPrimary = Color.White,
                 accent = AquaMintAccentLight,
                 secondary = AquaMintSecondaryLight,
-                textPrimary = Color(0xFF042F2E),
-                textSecondary = Color(0xFF334155),
-                textMuted = Color(0xFF475569),
+                textPrimary = Color(0xFF0E1D1B),
+                textSecondary = Color(0xFF425955),
+                textMuted = Color(0xFF647D79),
                 border = AquaMintBorderLight,
-                borderHighlight = AquaMintAccentLight.copy(alpha = 0.45f),
-                glassRimTop = AquaMintAccentLight.copy(alpha = 0.25f),
-                glassRimBottom = AquaMintAccentLight.copy(alpha = 0.20f),
-                codeBackground = Color(0xFFF1F5F9),
-                codeHeader = Color(0xFFE2E8F0),
-                codeText = Color(0xFF0F172A),
+                borderHighlight = AquaMintAccentLight.copy(alpha = 0.35f),
+                glassRimTop = AquaMintBorderLight,
+                glassRimBottom = AquaMintBorderLight,
+                codeBackground = Color(0xFFF3F4F6),
+                codeHeader = Color(0xFFE5E7EB),
+                codeText = Color(0xFF111827),
                 inputBackground = Color(0xFFFFFFFF),
                 chatBubbleUser = AquaMintAccentLight,
                 chatBubbleAssistant = Color(0xFFFFFFFF),
-                divider = AquaMintBorderLight.copy(alpha = 0.60f)
+                divider = AquaMintBorderLight
             )
         }
     }
