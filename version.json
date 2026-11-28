@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.197",
-  "version_code": 40197,
-  "tag_name": "v4.0.197",
+  "version_name": "4.0.198",
+  "version_code": 40198,
+  "tag_name": "v4.0.198",
   "channel": "stable",
   "changelog": [
-    "fix(cactus): strip <|im_end|> special tokens, slash prompt/tool overhead, and move loading status to thought indicator"
+    "fix(cactus): apply user-turn /no_think, reset KV state cleanly, drop Scratchpad placeholder goal, and skip __MACOSX zip metadata"
   ]
 }
