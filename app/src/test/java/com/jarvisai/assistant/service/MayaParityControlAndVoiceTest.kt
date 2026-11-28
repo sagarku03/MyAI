@@ -7,7 +7,11 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ApplicationProvider
 import com.jarvisai.assistant.audio.AdaptiveEchoCanceller
 import com.jarvisai.assistant.audio.FullDuplexVoiceEngine
+import com.jarvisai.assistant.audio.LiveSpeechTurnDetector
 import com.jarvisai.assistant.audio.SileroVadManager
+import com.jarvisai.assistant.data.network.GeminiApiService
+import com.jarvisai.assistant.model.SupportedLanguage
+import com.jarvisai.assistant.model.VoiceGender
 import kotlin.math.PI
 import kotlin.math.sin
 import kotlinx.coroutines.runBlocking
@@ -308,5 +312,149 @@ class MayaParityControlAndVoiceTest {
         assertEquals(3, tier3.recoveryStage)
         assertEquals("RECOVERY_TIER3_LLM_REPLAN", tier3.strategyName)
         assertTrue(tier3.summary.contains("Use search icon"))
+    }
+
+    @Test
+    fun liveSpeechTurnDetector_calibratesNoisyRoom_finalizesTurnFast_andReleasesFlatNoise() {
+        val detector = LiveSpeechTurnDetector()
+
+        // 1. Steady 60Hz + 5.5kHz room fan/TV background hum (~0.024 normalized RMS, above legacy 0.010f cap)
+        val noisyIdlePcm = ByteArray(1280)
+        for (i in 0 until 640) {
+            val hum = sin(2.0 * PI * 60.0 * i / 16000.0) * 180.0 +
+                sin(2.0 * PI * 5500.0 * i / 16000.0) * 160.0
+            val s = hum.toInt().toShort()
+            noisyIdlePcm[i * 2] = (s.toInt() and 0xFF).toByte()
+            noisyIdlePcm[i * 2 + 1] = ((s.toInt() shr 8) and 0xFF).toByte()
+        }
+        val noisyRms = 0.024f
+
+        var stuckSpeakingCount = 0
+        var lastAmbient = 0f
+        repeat(20) {
+            val res = detector.processFrame(
+                gainedPcm = noisyIdlePcm,
+                bytesRead = noisyIdlePcm.size,
+                rawRms = noisyRms,
+                interimTranscript = ""
+            )
+            lastAmbient = res.ambientNoiseRms
+            if (res.isUserSpeaking) stuckSpeakingCount++
+            assertFalse("Idle noisy room frames must stay attenuated", res.sendUnattenuatedSpeech)
+        }
+        assertTrue("Ambient floor should adapt above legacy 0.015f (was $lastAmbient)", lastAmbient >= 0.017f)
+        assertEquals("Noisy idle hum must never lock on User Speaking...", 0, stuckSpeakingCount)
+
+        // Check comfort attenuation helper produces ~20x quieter idle signal
+        val attenuated = LiveSpeechTurnDetector.scalePcmInto(
+            source = noisyIdlePcm,
+            dest = ByteArray(noisyIdlePcm.size),
+            bytesRead = noisyIdlePcm.size,
+            gainFactor = LiveSpeechTurnDetector.IDLE_NOISE_ATTENUATION_FACTOR
+        )
+        val maxAbsAttenuated = (0 until 640).maxOf { idx ->
+            kotlin.math.abs(((attenuated[idx * 2 + 1].toInt() shl 8) or (attenuated[idx * 2].toInt() and 0xFF)).toShort().toInt())
+        }
+        assertTrue("Comfort attenuation must push idle noise way down ($maxAbsAttenuated)", maxAbsAttenuated <= 30)
+
+        // 2. Genuine human speech burst (240Hz formant vowel @ high SNR) -> should finalize cleanly in ~520ms
+        val speechPcm = ByteArray(1280)
+        for (i in 0 until 640) {
+            val s = (sin(2.0 * PI * 240.0 * i / 16000.0) * 1800.0).toInt().toShort()
+            speechPcm[i * 2] = (s.toInt() and 0xFF).toByte()
+            speechPcm[i * 2 + 1] = ((s.toInt() shr 8) and 0xFF).toByte()
+        }
+        var onsetSeen = false
+        var flushedPreRoll = 0
+        repeat(8) {
+            val res = detector.processFrame(
+                gainedPcm = speechPcm,
+                bytesRead = speechPcm.size,
+                rawRms = 0.13f,
+                interimTranscript = ""
+            )
+            if (res.justStartedSpeaking) {
+                onsetSeen = true
+                flushedPreRoll = res.preRollFramesToFlush.size
+            }
+        }
+        assertTrue("Human utterance must enter User Speaking", onsetSeen)
+        assertTrue("Speech onset must flush buffered pre-roll frames", flushedPreRoll >= 2)
+
+        // Trailing silence with transcript "Hello" -> Hybrid VAD should emit audioStreamEnd quickly (< 400ms)
+        var emittedStreamEnd = false
+        var transitionedToProcessing = false
+        for (step in 1..15) {
+            val endRes = detector.processFrame(
+                gainedPcm = noisyIdlePcm,
+                bytesRead = noisyIdlePcm.size,
+                rawRms = noisyRms,
+                interimTranscript = "Hello"
+            )
+            if (endRes.shouldEmitAudioStreamEnd) {
+                emittedStreamEnd = true
+                transitionedToProcessing = endRes.shouldTransitionToProcessing
+                break
+            }
+        }
+        assertTrue("Completed user utterance must emit Hybrid VAD audioStreamEnd", emittedStreamEnd)
+        assertTrue("Completed turn must transition UI to Processing...", transitionedToProcessing)
+
+        // 3. Anti-stick recovery: even if forced into speaking by a sudden click, flat low-contrast hum must auto-release
+        detector.reset()
+        detector.notifyExternalBargeInStarted(nowMs = 1000L, initialFrames = 2)
+        val flatHum = ByteArray(1280)
+        for (i in 0 until 640) {
+            val s = (sin(2.0 * PI * 120.0 * i / 16000.0) * 195.0).toInt().toShort()
+            flatHum[i * 2] = (s.toInt() and 0xFF).toByte()
+            flatHum[i * 2 + 1] = ((s.toInt() shr 8) and 0xFF).toByte()
+        }
+        var released = false
+        repeat(60) { idx ->
+            val r = detector.processFrame(
+                gainedPcm = flatHum,
+                bytesRead = flatHum.size,
+                rawRms = 0.016f,
+                interimTranscript = "",
+                nowMs = 1000L + (idx + 1) * 40L
+            )
+            if (r.noiseFalseAlarmReleased) {
+                released = true
+            }
+        }
+        assertTrue("Sustained flat low-SNR hum must auto-release via anti-stick guard", released)
+    }
+
+    @Test
+    fun liveManager_blocksVietnameseHallucinations_andEnablesFastVadInEchoGuard() {
+        val manager = GeminiLiveVoiceManager(context, GeminiApiService())
+
+        // Regression test from device screen recording: Vietnamese hallucination "Chào mí ngụi." must be blocked
+        assertEquals("", manager.sanitizeTranscriptChunkScript("Chào mí ngụi."))
+        assertEquals("", manager.sanitizeTranscriptChunkScript("Cảm ơn các bạn"))
+
+        // Valid Hinglish & Hindi Devanagari user speech must remain intact
+        assertEquals("Hello sun raha hai?", manager.sanitizeTranscriptChunkScript("Hello sun raha hai?"))
+        assertEquals("कनेक्ट हो गया", manager.sanitizeTranscriptChunkScript("कनेक्ट हो गया"))
+
+        // Official Hybrid VAD audioStreamEnd payload format
+        val endPayload = manager.buildRealtimeAudioStreamEndPayload()
+        assertTrue(endPayload.getJSONObject("realtimeInput").getBoolean("audioStreamEnd"))
+
+        // Echo-Guard Safe Mode (fullDuplex=false) must STILL send fast realtimeInputConfig.automaticActivityDetection
+        val setup = manager.buildSetupMessage(
+            modelPath = "models/gemini-2.5-flash-native-audio-latest",
+            voicePersona = "Puck",
+            voiceGender = VoiceGender.MALE,
+            assistantName = "Agentra",
+            language = SupportedLanguage.HINGLISH,
+            memories = emptyList(),
+            includeAffectiveDialog = false
+        )
+        val vad = setup.getJSONObject("setup")
+            .getJSONObject("realtimeInputConfig")
+            .getJSONObject("automaticActivityDetection")
+        assertFalse(vad.getBoolean("disabled"))
+        assertEquals("END_SENSITIVITY_HIGH", vad.getString("endOfSpeechSensitivity"))
     }
 }

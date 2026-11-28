@@ -313,9 +313,9 @@ class FullDuplexVoiceEngine(
 
         // Dynamic ceiling anchored on AEC residual rather than raw speaker bleed
         val expectedResidualCeiling = maxOf(
-            ambientNoiseRms * 2.15f,
-            adaptiveEchoFloorRms * 1.35f,
-            0.025f
+            ambientNoiseRms * 2.35f,
+            adaptiveEchoFloorRms * 1.45f,
+            0.032f
         ).coerceAtMost(0.26f)
 
         val ratio = if (expectedResidualCeiling > 0.001f) residualRms / expectedResidualCeiling else 0f
@@ -323,13 +323,13 @@ class FullDuplexVoiceEngine(
         val strongCleanCancellation = aecRes.erleDb >= 18f && residualRms < expectedResidualCeiling * 1.15f
         val hasVocalPitchEvidence = aecRes.pitchHz in 75f..420f && aecRes.harmonicity >= 0.34f
         val isStrongCloseVoice = !strongCleanCancellation &&
-            residualRms >= maxOf(adaptiveEchoFloorRms * 1.70f, 0.055f) &&
+            residualRms >= maxOf(adaptiveEchoFloorRms * 1.85f, 0.075f) &&
             isHumanVoiceBand &&
             (hasVocalPitchEvidence || aecRes.voiceBandRatio >= 0.52f)
         val isHumanDoubleTalk = !strongCleanCancellation &&
             residualRms >= expectedResidualCeiling &&
             isHumanVoiceBand &&
-            (vadResult.isSpeech || vadResult.confidence >= 0.42f || ratio >= 1.25f || hasVocalPitchEvidence)
+            (vadResult.isSpeech || vadResult.confidence >= 0.42f || ratio >= 1.30f || hasVocalPitchEvidence)
 
         var shouldPauseNow = false
         var shouldResumeNow = false
@@ -340,7 +340,8 @@ class FullDuplexVoiceEngine(
             consecutiveCalmFrames = 0
             pausedCalmFrames = 0
 
-            if (bargeInStage == BargeInStage.NONE && consecutiveDoubleTalkFrames >= 1) {
+            val requiredPauseFrames = if (isStrongCloseVoice) 1 else 2
+            if (bargeInStage == BargeInStage.NONE && consecutiveDoubleTalkFrames >= requiredPauseFrames) {
                 // Stage 1: Instant local duck/pause while verifying human double-talk continues
                 bargeInStage = BargeInStage.PAUSED
                 shouldPauseNow = true

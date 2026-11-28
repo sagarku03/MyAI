@@ -33,6 +33,7 @@ import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.jarvisai.assistant.audio.FullDuplexVoiceEngine
+import com.jarvisai.assistant.audio.LiveSpeechTurnDetector
 import com.jarvisai.assistant.data.local.MemoryEntity
 import com.jarvisai.assistant.data.network.BidiModelCandidate
 import com.jarvisai.assistant.data.network.GeminiApiService
@@ -165,6 +166,7 @@ class GeminiLiveVoiceManager(
     private var audioTrack: AudioTrack? = null
 
     private val fullDuplexEngine = FullDuplexVoiceEngine()
+    private val speechTurnDetector = LiveSpeechTurnDetector()
 
     // Suppression latch after local barge-in so in-flight stale modelTurn audio packets from the
     // interrupted AI turn cannot restart AudioTrack playback 10-200ms later before server emits `interrupted: true`
@@ -513,6 +515,7 @@ class GeminiLiveVoiceManager(
         logEvent("MIC_PERMISSION_GRANTED", "Android RECORD_AUDIO permission verified", showInHud = false)
 
         val currentGen = sessionGeneration.incrementAndGet()
+        activeSessionResumptionHandle = ""
         userInitiatedStop.set(false)
         wsSetupCompleted.set(false)
         isModelCurrentlyResponding.set(false)
@@ -556,6 +559,7 @@ class GeminiLiveVoiceManager(
         lastFullDuplexEnabled = fullDuplexEnabled
         _isFullDuplexActive.value = fullDuplexEnabled
         fullDuplexEngine.reset()
+        speechTurnDetector.reset()
         lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
 
         logEvent(
@@ -782,7 +786,7 @@ class GeminiLiveVoiceManager(
         includeAudioTranscription: Boolean = true,
         includeNonBlockingBehavior: Boolean? = null,
         includeSessionResilience: Boolean = true,
-        includeRealtimeInputConfig: Boolean = lastFullDuplexEnabled,
+        includeRealtimeInputConfig: Boolean = true,
         includeAffectiveDialog: Boolean? = null
     ) {
         if (sessionGeneration.get() != generation || !_isSessionActive.value || userInitiatedStop.get()) {
@@ -1116,7 +1120,7 @@ class GeminiLiveVoiceManager(
         ambientRoomTalkEnabled: Boolean = true,
         includeSessionResilience: Boolean = true,
         includeNonBlockingBehavior: Boolean = modelPath.contains("3.8", ignoreCase = true) || modelPath.contains("gemini-3", ignoreCase = true),
-        includeRealtimeInputConfig: Boolean = lastFullDuplexEnabled,
+        includeRealtimeInputConfig: Boolean = true,
         includeAffectiveDialog: Boolean = lastFullDuplexEnabled
     ): JSONObject {
         val genderDirective = if (voiceGender == VoiceGender.FEMALE) {
@@ -1334,8 +1338,8 @@ class GeminiLiveVoiceManager(
                                         put("disabled", false)
                                         put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
                                         put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
-                                        put("prefixPaddingMs", 120)
-                                        put("silenceDurationMs", 420)
+                                        put("prefixPaddingMs", 140)
+                                        put("silenceDurationMs", 380)
                                     }
                                 )
                                 put("activityHandling", "START_OF_ACTIVITY_INTERRUPTS")
@@ -1529,6 +1533,7 @@ class GeminiLiveVoiceManager(
             if (inputTranscription != null) {
                 val rawUserChunk = sanitizeTranscriptChunkScript(inputTranscription.optString("text", ""))
                 if (rawUserChunk.isNotBlank()) {
+                    speechTurnDetector.notifyServerTranscriptReceived(nowMs)
                     lastHumanOrAiActivityTimestampMs.set(nowMs)
                     val isWithinRecentModelOrToolWindow =
                         (nowMs - lastModelTurnChunkTimestampMs.get()) in 0L..2200L ||
@@ -2091,7 +2096,7 @@ class GeminiLiveVoiceManager(
                         preBufferedBytes = 0
                     }
                     // Wait for the AudioTrack internal hardware ring buffer tail to finish draining
-                    delay(if (lastFullDuplexEnabled) 110L else 280L)
+                    delay(if (lastFullDuplexEnabled) 110L else 150L)
                     isFirstBurstChunk = true
                     isAudioPlaybackActive.set(false)
                     fullDuplexEngine.markFarEndSilent()
@@ -2219,22 +2224,20 @@ class GeminiLiveVoiceManager(
 
             val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 40ms @ 16kHz 16-bit mono = 1280 bytes
             val gainedBuffer = ByteArray(FRAME_SIZE_BYTES) // Pre-allocated to avoid 25 ByteArray/sec GC churn on urgent audio thread
+            val attenuatedBuffer = ByteArray(FRAME_SIZE_BYTES) // Pre-allocated 0.05x idle comfort noise buffer
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             var isExternalHeadset = FullDuplexVoiceEngine.isExternalHeadsetConnected(audioManager)
             var routePollCounter = 0
 
             isUserCurrentlySpeaking = false
-            var consecutiveSpeechFrames = 0
+            speechTurnDetector.reset()
             var consecutiveZeroSignalFrames = 0
-            var silenceDurationMs = 0L
-            var ambientNoiseRms = 0.008f
 
             while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
                 if (_isMicMuted.value || !wsSetupCompleted.get()) {
                     emitAudioLevelThrottled(0f, force = true)
                     isUserCurrentlySpeaking = false
-                    consecutiveSpeechFrames = 0
-                    silenceDurationMs = 0L
+                    speechTurnDetector.resetTurnKeepNoiseFloor()
                     delay(45)
                     continue
                 }
@@ -2267,9 +2270,9 @@ class GeminiLiveVoiceManager(
                 val timeSincePlaybackEnded = System.currentTimeMillis() - lastPlaybackFinishedTimestampMs.get()
                 val playingNow = isAudioPlaybackActive.get()
                 val tailGuardMs = when {
-                    !lastFullDuplexEnabled -> 180L
+                    !lastFullDuplexEnabled -> 120L
                     isExternalHeadset -> 0L
-                    else -> 85L
+                    else -> 80L
                 }
 
                 // Apply 1.55x software pre-gain upfront into pre-allocated buffer (zero heap allocation per frame)
@@ -2284,8 +2287,7 @@ class GeminiLiveVoiceManager(
                     if (!lastFullDuplexEnabled) {
                         // Safe Half-Duplex Echo-Guard mode: drop mic frames while speaker plays
                         isUserCurrentlySpeaking = false
-                        consecutiveSpeechFrames = 0
-                        silenceDurationMs = 0L
+                        speechTurnDetector.resetTurnKeepNoiseFloor()
                         continue
                     }
 
@@ -2293,7 +2295,7 @@ class GeminiLiveVoiceManager(
                     val duplexDecision = fullDuplexEngine.evaluateDuringPlayback(
                         gainedMicPcm = gainedBytes,
                         bytesRead = bytesRead,
-                        ambientNoiseRms = ambientNoiseRms,
+                        ambientNoiseRms = speechTurnDetector.currentAmbientNoiseRms(),
                         isExternalHeadset = isExternalHeadset
                     )
 
@@ -2319,12 +2321,12 @@ class GeminiLiveVoiceManager(
 
                     if (duplexDecision.shouldTriggerBargeIn) {
                         logEvent("DUPLEX_BARGE_IN", duplexDecision.reason, showInHud = false)
-                        // Suppress in-flight stale audio packets from the interrupted AI turn so
-                        // playback NEVER resumes over the user while Gemini processes the interruption!
-                        interruptAssistantPlayback(suppressInFlightMs = 2200L)
+                        interruptAssistantPlayback(suppressInFlightMs = 950L)
                         isUserCurrentlySpeaking = true
-                        consecutiveSpeechFrames = 2
-                        silenceDurationMs = 0L
+                        speechTurnDetector.notifyExternalBargeInStarted(
+                            nowMs = System.currentTimeMillis(),
+                            initialFrames = 4
+                        )
                         lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
                         _status.value = AssistantStatus.LISTENING
                         updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
@@ -2347,8 +2349,7 @@ class GeminiLiveVoiceManager(
                     } else {
                         // Loudspeaker playing cleanly with no committed double-talk: keep cleaned pre-roll warm & suppress echo
                         isUserCurrentlySpeaking = false
-                        consecutiveSpeechFrames = 0
-                        silenceDurationMs = 0L
+                        speechTurnDetector.resetTurnKeepNoiseFloor()
                         continue
                     }
                 } else if (
@@ -2369,8 +2370,7 @@ class GeminiLiveVoiceManager(
                         fullDuplexEngine.pushPreRollFrame(tailAec, tailAec.size)
                     }
                     isUserCurrentlySpeaking = false
-                    consecutiveSpeechFrames = 0
-                    silenceDurationMs = 0L
+                    speechTurnDetector.resetTurnKeepNoiseFloor()
                     continue
                 }
 
@@ -2403,84 +2403,74 @@ class GeminiLiveVoiceManager(
                     consecutiveZeroSignalFrames = 0
                 }
 
-                if (!isUserCurrentlySpeaking && rawRms < ambientNoiseRms * 1.35f) {
-                    ambientNoiseRms = (ambientNoiseRms * 0.92f + rawRms * 0.08f).coerceIn(0.004f, 0.024f)
+                val interimTranscriptSnapshot = synchronized(pendingUserTranscriptBuffer) {
+                    pendingUserTranscriptBuffer.toString().trim()
+                }
+                val turnDecision = speechTurnDetector.processFrame(
+                    gainedPcm = gainedBytes,
+                    bytesRead = bytesRead,
+                    rawRms = rawRms,
+                    interimTranscript = interimTranscriptSnapshot
+                )
+                isUserCurrentlySpeaking = turnDecision.isUserSpeaking
+
+                if (turnDecision.justStartedSpeaking) {
+                    lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
+                    turnWatchdogJob?.cancel()
+                    if (_status.value != AssistantStatus.LISTENING) {
+                        _status.value = AssistantStatus.LISTENING
+                    }
+                    updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
+                    updateConnectionLabelIfChanged("User Speaking...")
+                    for (preFrame in turnDecision.preRollFramesToFlush) {
+                        val preB64 = Base64.encodeToString(preFrame, 0, minOf(bytesRead, preFrame.size), Base64.NO_WRAP)
+                        sendRealtimeAudioChunk(preB64)
+                    }
+                } else if (turnDecision.isUserSpeaking) {
+                    lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
+                    updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
+                    updateConnectionLabelIfChanged("User Speaking...")
+                } else if (turnDecision.noiseFalseAlarmReleased) {
+                    clearBargeInSuppressionLatch()
+                    if (_status.value != AssistantStatus.LISTENING && !isAudioPlaybackActive.get()) {
+                        _status.value = AssistantStatus.LISTENING
+                    }
+                    if (!isAudioPlaybackActive.get() && !isModelCurrentlyResponding.get()) {
+                        updateLiveUiStatus(LiveVoiceUiStateStatus.LISTENING)
+                        updateConnectionLabelIfChanged("Listening... ($lastVoicePersona)")
+                    }
+                } else if (turnDecision.shouldTransitionToProcessing) {
+                    clearBargeInSuppressionLatch()
+                    lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
+                    _status.value = AssistantStatus.THINKING
+                    updateLiveUiStatus(LiveVoiceUiStateStatus.PROCESSING)
+                    _connectionStateLabel.value = "Processing..."
+                    logEvent(
+                        "USER_TURN_COMPLETED",
+                        "User finished speaking (${turnDecision.turnEndReason}); awaiting Gemini response",
+                        showInHud = false
+                    )
+                    startResponseWatchdog(generation)
                 }
 
-                val speechStartThreshold = (ambientNoiseRms * 1.65f).coerceAtLeast(0.010f)
-                val speechContinueThreshold = (ambientNoiseRms * 1.25f).coerceAtLeast(0.007f)
-
-                if (!isUserCurrentlySpeaking) {
-                    if (rawRms >= speechStartThreshold) {
-                        consecutiveSpeechFrames++
-                        if (consecutiveSpeechFrames >= 1) {
-                            isUserCurrentlySpeaking = true
-                            silenceDurationMs = 0L
-                            lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
-                            turnWatchdogJob?.cancel()
-                            if (_status.value != AssistantStatus.LISTENING) {
-                                _status.value = AssistantStatus.LISTENING
-                            }
-                            updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
-                            updateConnectionLabelIfChanged("User Speaking...")
-                        }
-                    } else {
-                        consecutiveSpeechFrames = 0
-                    }
-                } else {
-                    if (rawRms >= speechContinueThreshold) {
-                        consecutiveSpeechFrames++
-                        silenceDurationMs = 0L
-                        lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
-                        updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
-                        updateConnectionLabelIfChanged("User Speaking...")
-                    } else {
-                        silenceDurationMs += FRAME_DURATION_MS
-                        val interimTranscriptSnapshot = synchronized(pendingUserTranscriptBuffer) {
-                            pendingUserTranscriptBuffer.toString().trim()
-                        }
-                        val turnDecision = if (interimTranscriptSnapshot.isNotBlank()) {
-                            LinguisticTurnTakingEngine.evaluateTurn(
-                                transcript = interimTranscriptSnapshot,
-                                silenceDurationMs = silenceDurationMs
-                            )
-                        } else {
-                            LinguisticTurnTakingEngine.TurnDecision(
-                                isThoughtComplete = silenceDurationMs >= END_OF_SPEECH_SILENCE_MS,
-                                recommendedSilenceWaitMs = END_OF_SPEECH_SILENCE_MS,
-                                reason = "Acoustic VAD silence threshold (${END_OF_SPEECH_SILENCE_MS}ms)"
-                            )
-                        }
-                        if (turnDecision.isThoughtComplete) {
-                            // User finished their (possibly interrupting) sentence — immediately allow
-                            // the AI's brand-new response to play with zero delay!
-                            clearBargeInSuppressionLatch()
-                            isUserCurrentlySpeaking = false
-                            consecutiveSpeechFrames = 0
-                            silenceDurationMs = 0L
-                            lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
-                            _status.value = AssistantStatus.THINKING
-                            updateLiveUiStatus(LiveVoiceUiStateStatus.PROCESSING)
-                            _connectionStateLabel.value = "Processing..."
-                            logEvent(
-                                "USER_TURN_COMPLETED",
-                                "User finished speaking (${turnDecision.reason}); awaiting Gemini response",
-                                showInHud = false
-                            )
-                            startResponseWatchdog(generation)
-                        }
-                    }
-                }
-
-                // Stream 1.55x boosted PCM during speech and 1.0x natural unboosted mic audio during silence
-                // (never zero-silence, which breaks VAD, and never 1.55x boosted room noise during silence, which delays VAD!)
-                val pcmToSend = if (isUserCurrentlySpeaking || rawRms >= speechContinueThreshold) {
+                // Stream 1.55x boosted PCM during verified human speech + hangover, and comfort-attenuated 0.05x PCM
+                // during idle background noise so room TV/fan hum NEVER stalls VAD or hallucinates foreign ASR.
+                val pcmToSend = if (turnDecision.sendUnattenuatedSpeech) {
                     gainedBytes
                 } else {
-                    chunkBuffer
+                    LiveSpeechTurnDetector.scalePcmInto(
+                        source = chunkBuffer,
+                        dest = attenuatedBuffer,
+                        bytesRead = bytesRead,
+                        gainFactor = LiveSpeechTurnDetector.IDLE_NOISE_ATTENUATION_FACTOR
+                    )
                 }
                 val b64Audio = Base64.encodeToString(pcmToSend, 0, bytesRead, Base64.NO_WRAP)
                 val sentOk = sendRealtimeAudioChunk(b64Audio)
+                if (sentOk && turnDecision.shouldEmitAudioStreamEnd) {
+                    // Official Gemini Live Hybrid VAD: immediately finalize completed utterance for <1s reply
+                    sendRealtimeAudioStreamEnd()
+                }
 
                 if (sentOk) {
                     consecutiveSendFailures.set(0)
@@ -2613,10 +2603,21 @@ class GeminiLiveVoiceManager(
         }
     }
 
+    internal fun buildRealtimeAudioStreamEndPayload(): JSONObject {
+        return JSONObject().apply {
+            put("realtimeInput", JSONObject().put("audioStreamEnd", true))
+        }
+    }
+
     private fun sendRealtimeAudioChunk(base64Pcm: String): Boolean {
         val ws = webSocket ?: return false
         val realtimeInputJson = buildRealtimeAudioChunkPayload(base64Pcm)
         return ws.send(realtimeInputJson.toString())
+    }
+
+    private fun sendRealtimeAudioStreamEnd(): Boolean {
+        val ws = webSocket ?: return false
+        return ws.send(buildRealtimeAudioStreamEndPayload().toString())
     }
 
     // =========================================================================
@@ -2878,7 +2879,7 @@ class GeminiLiveVoiceManager(
                     try {
                         val snap = JarvisAccessibilityService.getScreenContext(appContext)
                         val isOwnAppForeground = snap.activePackageName == appContext.packageName
-                        if (isOwnAppForeground) {
+                        if (isOwnAppForeground || isTransientSystemOverlaySnapshot(snap)) {
                             delay(LIVE_SCREEN_VISION_INTERVAL_MS)
                             continue
                         }
@@ -2913,10 +2914,10 @@ class GeminiLiveVoiceManager(
                             }
                         }
 
-                        // Throttle visual JPEG capture cleanly: ~1s when idle, ~2.2s while speaking
-                        val desiredFrameIntervalMs = if (isSpeakingOrResponding) 2200L else 950L
-                        if ((tickStartMs - lastVisionFrameSentAtMs) < desiredFrameIntervalMs) {
-                            delay(400L)
+                        // Never flood the Gemini Live audio WebSocket with background JPEGs while speaking/responding
+                        // or when explicit screen sharing is OFF and user only flashed an overlay.
+                        if (isSpeakingOrResponding || (tickStartMs - lastVisionFrameSentAtMs) < 3500L) {
+                            delay(500L)
                             continue
                         }
 
@@ -3384,6 +3385,7 @@ class GeminiLiveVoiceManager(
         isUserCurrentlySpeaking = false
         clearBargeInSuppressionLatch()
         fullDuplexEngine.reset()
+        speechTurnDetector.reset()
         releaseAudioEffects()
         if (!keepScreenShare) {
             stopScreenSharing(notifyHud = false)
@@ -3474,10 +3476,7 @@ class GeminiLiveVoiceManager(
                 } catch (_: Exception) {
                 }
                 try {
-                    val streamEndMsg = JSONObject().apply {
-                        put("realtimeInput", JSONObject().put("audioStreamEnd", true))
-                    }
-                    webSocket?.send(streamEndMsg.toString())
+                    sendRealtimeAudioStreamEnd()
                 } catch (_: Exception) {
                 }
             }
@@ -3838,19 +3837,53 @@ class GeminiLiveVoiceManager(
      * Kannada, Malayalam, Bengali, Gurmukhi, Arabic/Urdu, CJK) while preserving Devanagari
      * (Hindi), Latin (English/Hinglish), digits, and standard whitespace/punctuation.
      */
-    private fun sanitizeTranscriptChunkScript(rawChunk: String): String {
+    private fun isTransientSystemOverlaySnapshot(snap: ScreenContextSnapshot): Boolean {
+        val pkg = snap.activePackageName.lowercase(Locale.US)
+        if (pkg.isBlank() || pkg == "com.android.systemui" || pkg.contains("screenrecord")) {
+            return true
+        }
+        val labels = snap.elements.mapNotNull { el ->
+            el.text.ifBlank { el.contentDescription }.trim().takeIf { it.isNotEmpty() }
+        }
+        // Screen-recorder floating timer badges ("00:11") often steal window focus cleanly
+        if (labels.isNotEmpty() && labels.size <= 5 && labels.any { Regex("^\\d{1,2}:\\d{2}$").matches(it) }) {
+            return true
+        }
+        return false
+    }
+
+    internal fun sanitizeTranscriptChunkScript(rawChunk: String): String {
         if (rawChunk.isEmpty()) return rawChunk
+        var accentedOrForeignLetters = 0
+        var totalLetters = 0
         val filtered = buildString(rawChunk.length) {
             for (ch in rawChunk) {
                 val code = ch.code
-                val isAllowed = code <= 0x024F || // Latin + ASCII + punctuation
-                    code in 0x0900..0x097F ||     // Devanagari (Hindi)
-                    code in 0x2000..0x206F ||     // General punctuation
-                    ch.isWhitespace()
-                if (isAllowed) {
+                val isAccentedLatin = code in 0x00C0..0x024F || code in 0x1E00..0x1EFF || code in 0x0300..0x036F
+                val isForeignScript = code in 0x0980..0x0DFF ||
+                    code in 0x0600..0x06FF ||
+                    code in 0x0400..0x052F ||
+                    code in 0x0E00..0x0E7F ||
+                    code in 0x3040..0x9FFF ||
+                    code in 0xAC00..0xD7AF
+                if (Character.isLetter(ch) || isAccentedLatin || isForeignScript) {
+                    totalLetters++
+                    if (isAccentedLatin || isForeignScript) {
+                        accentedOrForeignLetters++
+                    }
+                }
+                val isAllowed = code in 0x0020..0x007E || // Basic ASCII printable + punctuation
+                    code in 0x0900..0x097F ||         // Devanagari (Hindi)
+                    code in 0x2000..0x206F ||         // General punctuation
+                    ch == '\n' || ch == '\r' || ch == '\t'
+                if (isAllowed && !isAccentedLatin && !isForeignScript) {
                     append(ch)
                 }
             }
+        }
+        // Reject entire noise-hallucinated foreign phrases (e.g. "Chào mí ngụi.") instead of leaving fragments
+        if (accentedOrForeignLetters >= 2 || (totalLetters > 0 && accentedOrForeignLetters * 4 > totalLetters)) {
+            return ""
         }
         return filtered
     }
@@ -4018,7 +4051,6 @@ class GeminiLiveVoiceManager(
         private const val FRAME_SIZE_BYTES = 1280
         // ~60ms initial pre-buffer at 24kHz 16-bit mono = 2880 bytes for stutter-free audio playback
         private const val INITIAL_JITTER_PREBUFFER_BYTES = 2880
-        private const val END_OF_SPEECH_SILENCE_MS = 400L
         private const val MAX_AUTO_RECONNECTS = 6
         internal const val STUCK_RESPONSE_TIMEOUT_MS = 4000L
         internal const val LIVE_SCREEN_VISION_INTERVAL_MS = 1000L
